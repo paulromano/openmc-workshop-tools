@@ -103,12 +103,10 @@ WorkingDirectory={course}
 Environment=HOME={home}
 Environment=JUPYTER_CONFIG_DIR={jupyter}
 EnvironmentFile={env_path}
-ExecStart={venv}/bin/jupyter lab
+ExecStart=/bin/sh -c 'exec {venv}/bin/jupyter lab >> {home}/notebook_launch.log 2>&1'
 Restart=on-failure
 RestartSec=5
 UMask=0077
-StandardOutput=append:{home}/notebook_launch.log
-StandardError=inherit
 
 [Install]
 WantedBy=multi-user.target

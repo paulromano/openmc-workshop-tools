@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -114,6 +115,20 @@ class EnvironmentTest(unittest.TestCase):
         run = subprocess.run(['systemd-analyze', 'verify', str(self.args.unit_file)],
                              capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_service_process_creates_a_readable_private_log(self):
+        self.configure()
+        executable = self.args.root / 'venv/bin/jupyter'
+        nea.write_file(executable, '#!/bin/sh\necho "Jupyter output"\necho "Jupyter error" >&2\n', 0o755)
+        start = next(line.removeprefix('ExecStart=') for line in
+                     self.args.unit_file.read_text().splitlines() if line.startswith('ExecStart='))
+        subprocess.run(shlex.split(start), check=True, umask=0o077)
+        log = self.args.home / 'notebook_launch.log'
+        self.assertEqual(log.stat().st_uid, os.getuid())
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(log.read_text(), 'Jupyter output\nJupyter error\n')
+        subprocess.run(shlex.split(start), check=True, umask=0o077)
+        self.assertEqual(log.read_text().count('Jupyter output'), 2)
 
 
 if __name__ == '__main__':

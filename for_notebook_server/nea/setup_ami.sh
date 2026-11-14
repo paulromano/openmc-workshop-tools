@@ -233,6 +233,11 @@ source "$HOME/.config/openmc-nea/environment"
 set +a
 "$PYTHON" "$NEA_ROOT/nea_environment.py" verify --root "$NEA_ROOT" --transport
 "$SOFTWARE_DIR/openmc/bin/openmc" --version > "$RECORD_DIR/openmc-version.txt"
+# Repair logs made by the older service, which opened them as root.
+if [[ -f $HOME/notebook_launch.log ]]; then
+    sudo chown "$(id -u):$(id -g)" "$HOME/notebook_launch.log"
+    chmod 600 "$HOME/notebook_launch.log"
+fi
 sudo install -m 644 "$BUILD_DIR/nea-jupyter.service" /etc/systemd/system/nea-jupyter.service
 sudo systemctl daemon-reload
 sudo systemctl enable nea-jupyter.service
