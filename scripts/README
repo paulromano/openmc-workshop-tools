@@ -5,19 +5,38 @@ workflow is:
     app.
 
  2: Pick a name for a group of instances. The name itself does not matter; it's
-    just a bookkeping device. Ex: "hydrogen"
+    just a bookkeeping device. Ex: "hydrogen"
 
- 3: Run launch_instances.py to start the servers that host the notebooks.
+ 3: Run launch_instances.py to start the servers that host the notebooks:
 
- 4: Wait a minute or two for the servers to finish initializing.
+        python scripts/launch_instances.py hydrogen 10
 
- 5: Run add_hostnames.py to assign a unique hostname to each new instance.
+    Each instance gets ws_group=hydrogen and a unique ws_hostname such as
+    hydrogen0 during launch. Existing names in the group are preserved and
+    skipped. Run only one launcher per group at a time to avoid duplicate names.
 
- 6: Run start_nb_servers.py to checkout the latest repo branch and start the
-    Jupyter Lab servers.
+ 4: Check that all the new instances appear with their assigned hostnames in:
 
- 7: Run update_proxy.py so that the proxy server(s) will send web traffic to the
-    appropriate machines.
+        python scripts/get_ip_addresses.py hydrogen
+
+    Then run update_proxy.py so that the proxy server(s) will send web traffic
+    to the appropriate machines:
+
+        python scripts/update_proxy.py hydrogen
+
+    EC2 instance/tag information can take a short time to become visible.
+    Jupyter may still be starting afterward. Hostname assignment itself does
+    not require waiting for the instances to finish booting; ws_hostname is an
+    EC2 tag used by the proxy, not the OS hostname or a DNS record created on
+    the notebook server.
+
+The new NEA AMI starts Jupyter automatically through nea-jupyter.service.
+For older AMIs, wait for SSH to be ready and run start_nb_servers.py GROUP
+before using the notebooks. That script starts Jupyter through run_jupyter.sh;
+it does not currently update the course checkout.
+
+add_hostnames.py GROUP remains available for assigning names to older instances
+that are missing ws_hostname tags. It is unnecessary after the updated launcher.
 
 To launch one vanilla Ubuntu 26.04 amd64 builder for a new course AMI:
 

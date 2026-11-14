@@ -1,15 +1,16 @@
 """Launch AWS instances that will host the Jupyter Lab notebooks.
 
-Note that this script will attach a "ws_group" tag to each instance and set it
-to the given group name. The group name is purely a bookkeeping measure which
-makes it easier to e.g handle machines for workshop hosts differently than
-machines for participants.
-
+Each instance receives ws_group and a unique ws_hostname tag during launch.
+Names follow the existing group0, group1, etc. convention, skipping names
+already assigned in the group. Run only one launcher per group at a time.
 """
 
-import sys
+import argparse
+import uuid
 
 import boto3
+
+from utils import get_group_instances, unused_hostnames
 
 
 # Define parameters.
@@ -28,36 +29,47 @@ import boto3
 #IMAGE_ID = 'ami-07cc3b03befe448b9' # ANFM July 2025
 #IMAGE_ID = 'ami-045e275aa4922cd98' # ANFM July 2025 (us-east-1)
 #IMAGE_ID = 'ami-0e4a0355118ee4d3b' # NEA Course 2025-11
-IMAGE_ID = 'ami-0c5753a97399407e3' # NEA Course 2026-05
+#IMAGE_ID = 'ami-0c5753a97399407e3' # NEA Course 2026-05
+IMAGE_ID = 'ami-0832e5041637c8074' # NEA Course 2026-11
 
 KEYPAIR_NAME = 'X1 Carbon 2022'
 SECURITY_GROUP = 'sg-130bcb6b'
 
-# Connect to EC2.
-ec2 = boto3.client('ec2', region_name='us-east-1')
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('groupname')
+    parser.add_argument('n_instances', type=int)
+    args = parser.parse_args(argv)
+    if args.n_instances <= 0:
+        parser.error('n_instances must be positive')
 
-# Get the group name and number of instances from commandline args.
-groupname = sys.argv[1]
-n_instances = int(sys.argv[2])
+    ec2 = boto3.client('ec2', region_name='us-east-1')
+    existing = get_group_instances(ec2, args.groupname)
+    hostnames = unused_hostnames(args.groupname, existing)
 
-# Launch the instances.
-resp = ec2.run_instances(
-    ImageId=IMAGE_ID,
-    MinCount=n_instances,
-    MaxCount=n_instances,
-    InstanceType='c7i-flex.large',
-    KeyName=KEYPAIR_NAME,
-    SecurityGroupIds=(SECURITY_GROUP, ),
-    TagSpecifications=[{
-      'ResourceType': 'instance',
-      'Tags': [{'Key': 'ws_group', 'Value': groupname}]
-    }],
-    )
+    for _ in range(args.n_instances):
+        hostname = next(hostnames)
+        # A separate request gives each instance its own hostname at creation.
+        response = ec2.run_instances(
+            ImageId=IMAGE_ID,
+            MinCount=1,
+            MaxCount=1,
+            InstanceType='c7i-flex.large',
+            KeyName=KEYPAIR_NAME,
+            SecurityGroupIds=[SECURITY_GROUP],
+            TagSpecifications=[{
+                'ResourceType': 'instance',
+                'Tags': [{'Key': 'ws_group', 'Value': args.groupname},
+                         {'Key': 'ws_hostname', 'Value': hostname}],
+            }],
+            ClientToken=str(uuid.uuid4()),
+        )
+        instance = response['Instances'][0]
+        print(f"{hostname}: {instance['InstanceId']} "
+              f"{instance.get('PrivateIpAddress', '(private IP pending)')}", flush=True)
 
-print(resp)
-print()
+    print('Hostnames assigned. Allow time for the instances and Jupyter to finish starting.')
 
-for inst in resp['Instances']:
-    print(inst['InstanceId'])
-    print(inst['PrivateIpAddress'])
-    print()
+
+if __name__ == '__main__':
+    main()
