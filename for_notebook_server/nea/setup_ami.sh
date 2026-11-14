@@ -52,7 +52,7 @@ sudo apt-get update
 sudo env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
 packages=(build-essential gcc g++ gfortran cmake git curl ca-certificates
     "python$PYTHON_VERSION" "python$PYTHON_VERSION-venv" "python$PYTHON_VERSION-dev"
-    pkg-config autoconf automake libtool m4 patch xz-utils
+    pkg-config autoconf automake libtool m4 patch patchelf xz-utils
     libpng-dev libpugixml-dev libfmt-dev libeigen3-dev libnetcdf-dev
     libtbb-dev libembree-dev zlib1g-dev libcurl4-openssl-dev
     libgl1 libegl1 libegl-mesa0 libgl1-mesa-dri libopengl0 libxrender1 libxext6 fonts-dejavu-core)
@@ -158,6 +158,8 @@ mkdir "$BUILD_DIR/libmesh/build"
     make install
 )
 cp "$BUILD_DIR/libmesh/build/config.log" "$RECORD_DIR/libmesh-config.log"
+# Find the installed libngcore.so beside libnglib.so instead of in the build tree.
+patchelf --set-rpath "\$ORIGIN" "$SOFTWARE_DIR/libmesh/lib/libnglib.so"
 
 clone_source njoy2016 https://github.com/njoy/NJOY2016 "$NJOY_REF"
 cmake -S "$BUILD_DIR/njoy2016" -B "$BUILD_DIR/njoy2016/build" \
