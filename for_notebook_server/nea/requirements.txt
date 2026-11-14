@@ -1,0 +1,19 @@
+# Direct dependencies for the NEA image. The build also saves pip freeze output.
+jupyterlab==4.6.6
+jupyter>=1,<2
+notebook>=7,<8
+ipykernel>=6,<8
+ipywidgets>=8,<9
+numpy==2.5.4
+scipy==1.18.1
+pandas==3.1.1
+matplotlib==3.11.2
+h5py==3.16.0
+vtk==9.7.2
+pyvista[jupyter]==0.49.2
+mcpl>=2.2.4,<3
+lxml>=6,<7
+endf>=0.1.9,<1
+uncertainties>=3,<4
+pillow>=11
+packaging
