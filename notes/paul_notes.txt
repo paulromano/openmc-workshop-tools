@@ -1,0 +1,36 @@
+For Amazon Linux AMI, user is ec2-user
+
+Follow directions from https://medium.com/prog-code/lets-encrypt-wildcard-certificate-configuration-with-aws-route-53-9c15adb936a7
+
+Server: ec2-184-73-99-182.compute-1.amazonaws.com
+
+Install certbot:
+- sudo amazon-linux-extras install epel
+- sudo yum install -y certbox python3-pip
+
+
+certbot certonly -d openmccourse.org -d *.openmccourse.org --dns-route53 --logs-dir $HOME/letsencrypt/log --config-dir $HOME/letsencryt/config --work-dir $HOME/letsencrypt/work -m paul.k.romano@gmail.com --agree-tos --non-interactive --server https://acme-v02.api.letsencrypt.org/directory
+
+To renew, run the following (don't use sudo to run):
+
+certbot renew --logs-dir $HOME/letsencrypt/log --config-dir $HOME/letsencrypt/config --work-dir $HOME/letsencrypt/work
+
+To check certificates:
+
+certbot certificates --logs-dir $HOME/letsencrypt/log --config-dir $HOME/letsencrypt/config --work-dir $HOME/letsencrypt/work
+
+AWS keys are in ~/.aws/credentials
+
+- Setup image:
+
+sudo apt install cmake g++ python3-pip python3-venv python-is-python3 libeigen3-dev libpugixml-dev \
+                 libpng-dev build-essential libhdf5-dev
+pip install -U pip
+mkdir venv && cd venv
+python -m venv openmc_env
+source openmc_env/bin/activate
+# add the source to .bashrc
+
+Updating notebook password:
+
+- jupyter server password
