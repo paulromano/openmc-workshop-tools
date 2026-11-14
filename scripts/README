@@ -15,20 +15,28 @@ workflow is:
     hydrogen0 during launch. Existing names in the group are preserved and
     skipped. Run only one launcher per group at a time to avoid duplicate names.
 
- 4: Check that all the new instances appear with their assigned hostnames in:
+    The launcher waits for the new instances to be running, then updates and
+    reloads the NGINX proxy automatically. It uses the newly launched instance
+    IDs so delayed group-tag visibility cannot omit them from the proxy config.
+    Existing running instances in the group remain in the proxy configuration.
 
-        python scripts/get_ip_addresses.py hydrogen
+    Jupyter starts automatically on the new NEA AMI and may need a little longer
+    to finish starting after the proxy is updated.
 
-    Then run update_proxy.py so that the proxy server(s) will send web traffic
-    to the appropriate machines:
+Use --skip-proxy to launch and tag instances without waiting or changing NGINX:
 
-        python scripts/update_proxy.py hydrogen
+    python scripts/launch_instances.py hydrogen 10 --skip-proxy
 
-    EC2 instance/tag information can take a short time to become visible.
-    Jupyter may still be starting afterward. Hostname assignment itself does
-    not require waiting for the instances to finish booting; ws_hostname is an
-    EC2 tag used by the proxy, not the OS hostname or a DNS record created on
-    the notebook server.
+update_proxy.py remains available to retry a failed proxy update or refresh the
+group after other changes. A failed proxy update leaves the launched instances
+in place; rerun only the proxy command to avoid launching additional instances:
+
+    python scripts/update_proxy.py hydrogen
+
+The proxy configuration is streamed over SSH, so no local .conf file is created.
+NGINX configuration is checked before reload, and the previous configuration file
+is restored if installation, checking, or reloading fails. SSH errors are reported
+as failures. Both scripts use the proxy address and SSH key in update_proxy.py.
 
 The new NEA AMI starts Jupyter automatically through nea-jupyter.service.
 For older AMIs, wait for SSH to be ready and run start_nb_servers.py GROUP

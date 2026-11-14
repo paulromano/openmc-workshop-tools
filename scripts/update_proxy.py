@@ -1,81 +1,102 @@
-"""Update the NGINX proxy configuration for the given group of instances."""
+"""Update the NGINX proxy configuration for a workshop group."""
 
+import argparse
+import ipaddress
+import re
+import shlex
 import subprocess
-import sys
 
 import boto3
 
-from utils import get_aws_tag
+from utils import get_aws_tag, get_group_instances
 
 
-# Define parameters.
 KEYPAIR_PATH = '/home/romano/.ssh/id_rsa'
-PROXY_IPS = ('184.73.99.182', )
+PROXY_IPS = ('184.73.99.182',)
 
-# Connect to EC2.
-ec2 = boto3.client('ec2', region_name='us-east-1')
+# The configuration arrives on stdin. Temporary files exist only on the proxy.
+# Restore the previous file if installing, checking, or reloading fails.
+DEPLOY_SCRIPT = '''set -eu
+configuration=$(mktemp)
+backup=$(mktemp)
+trap 'rm -f "$configuration" "$backup"' EXIT
+cat > "$configuration"
+destination="/etc/nginx/conf.d/$1.conf"
+had_previous=0
+if sudo test -e "$destination"; then
+    sudo cp "$destination" "$backup"
+    had_previous=1
+fi
+if sudo install -m 644 "$configuration" "$destination" &&
+        sudo nginx -t && sudo service nginx reload; then
+    exit 0
+fi
+if [ "$had_previous" = 1 ]; then
+    sudo install -m 644 "$backup" "$destination"
+else
+    sudo rm -f "$destination"
+fi
+exit 1
+'''
 
-# Get the group name from the commandline.
-groupname = sys.argv[1]
 
-# Get the instances with the ws_group tag set to the given group name.
-filt = {'Name': 'tag:ws_group', 'Values': [groupname]}
-resp = ec2.describe_instances(Filters=[filt])
+def validate_group(groupname):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]*', groupname):
+        raise ValueError('The group name must start with a letter or digit and contain only letters, digits, or hyphens')
 
-# Get the private IP address and hostname of each instance.
-instance_ips = []
-instance_hostnames = []
-for res in resp['Reservations']:
-    for inst in res['Instances']:
-        instance_ips.append(inst['PrivateIpAddress'])
-        instance_hostnames.append(get_aws_tag(inst['Tags'], 'ws_hostname'))
 
-# Build the NGINX conf entry for each instance.
-out = ''
-for ip, hostname in zip(instance_ips, instance_hostnames):
-    out +=  'server {\n'
-    out += f'  server_name {hostname}.openmccourse.org;\n'
-    out +=  '  include /etc/nginx/conf.d/templ/server_templ.conf;\n'
-    out +=  '  location / {\n'
-    out += f'    proxy_pass http://{ip}:8888;\n'
-    out +=  '    include /etc/nginx/conf.d/templ/loc_templ.conf;\n'
-    out +=  '  }\n'
-    out +=  '}\n'
-    out +=  '\n'
+def build_configuration(instances):
+    entries = []
+    hostnames = set()
+    for instance in instances:
+        if instance['State']['Name'] != 'running':
+            continue
+        hostname = get_aws_tag(instance.get('Tags', []), 'ws_hostname')
+        if not hostname or not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', hostname):
+            raise ValueError(f"Instance {instance['InstanceId']} has a missing or invalid ws_hostname tag")
+        if hostname in hostnames:
+            raise ValueError(f'Duplicate ws_hostname tag: {hostname}')
+        hostnames.add(hostname)
+        ip = ipaddress.IPv4Address(instance['PrivateIpAddress'])
+        entries.append(
+            'server {\n'
+            f'  server_name {hostname}.openmccourse.org;\n'
+            '  include /etc/nginx/conf.d/templ/server_templ.conf;\n'
+            '  location / {\n'
+            f'    proxy_pass http://{ip}:8888;\n'
+            '    include /etc/nginx/conf.d/templ/loc_templ.conf;\n'
+            '  }\n'
+            '}\n\n')
+    if not entries:
+        raise ValueError('No running instances found; the proxy configuration was left unchanged')
+    return ''.join(entries)
 
-# Write a .conf file.
-with open(f'{groupname}.conf', 'w') as fh:
-    fh.write(out)
 
-# Update each proxy server.
-for inst_ip in PROXY_IPS:
-    # Copy the .conf file to the server.
-    args = ['scp', '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'KexAlgorithms=ecdh-sha2-nistp521',
-            '-o',
-            'StrictHostKeyChecking=no', '-i', KEYPAIR_PATH,
-            f'{groupname}.conf', f'ec2-user@{inst_ip}:']
-    subprocess.run(args)
+def update_proxy(groupname, instances=None):
+    """Stream a group's configuration over SSH, check NGINX, and reload it."""
+    validate_group(groupname)
+    if instances is None:
+        ec2 = boto3.client('ec2', region_name='us-east-1')
+        instances = get_group_instances(ec2, groupname)
+    configuration = build_configuration(instances)
+    command = shlex.join(['bash', '-c', DEPLOY_SCRIPT, 'bash', groupname])
+    for proxy_ip in PROXY_IPS:
+        print(f'Updating proxy {proxy_ip} for {groupname}...', flush=True)
+        subprocess.run([
+            'ssh', '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'StrictHostKeyChecking=no', '-o', 'KexAlgorithms=ecdh-sha2-nistp521',
+            '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15',
+            '-i', KEYPAIR_PATH, f'ec2-user@{proxy_ip}', command,
+        ], input=configuration, text=True, check=True)
+    print('Proxy configuration updated.', flush=True)
 
-    # SSH into the instance.
-    args = ['ssh', '-o', 'UserKnownHostsFile=/dev/null',
-            '-o', 'KexAlgorithms=ecdh-sha2-nistp521',
-            '-o',
-            'StrictHostKeyChecking=no', '-i',
-            KEYPAIR_PATH, f'ec2-user@{inst_ip}',
-            'bash -i']
-    ssh_process = subprocess.Popen(args, stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE, universal_newlines=True, bufsize=0)
 
-    # Move the .conf file to the appropriate directory.
-    ssh_process.stdin.write(f'sudo mv {groupname}.conf /etc/nginx/conf.d/\n')
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('groupname')
+    args = parser.parse_args(argv)
+    update_proxy(args.groupname)
 
-    # Tell NGINX to reload the configuration.
-    ssh_process.stdin.write(f'sudo service nginx reload\n')
 
-    ssh_process.stdin.close()
-    ssh_process.stdout.close()
-    ssh_process.wait()
-    if ssh_process.returncode < 0:
-        raise subprocess.CalledProcessError
-    print()
+if __name__ == '__main__':
+    main()
