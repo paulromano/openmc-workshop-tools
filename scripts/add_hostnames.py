@@ -8,7 +8,7 @@ from utils import get_aws_tag
 
 
 # Connect to EC2.
-ec2 = boto3.client('ec2')
+ec2 = boto3.client('ec2', region_name='us-east-1')
 
 # Get the group name from the commandline.
 groupname = sys.argv[1]

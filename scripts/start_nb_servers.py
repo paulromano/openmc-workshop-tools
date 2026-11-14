@@ -11,7 +11,7 @@ KEYPAIR_PATH = '/home/romano/.ssh/id_rsa'
 BRANCH_NAME = 'origin/ans_student_2021'
 
 # Connect to EC2.
-ec2 = boto3.client('ec2')
+ec2 = boto3.client('ec2', region_name='us-east-1')
 
 # Get the group name from the commandline.
 groupname = sys.argv[1]
@@ -32,8 +32,11 @@ for res in resp['Reservations']:
 
 # SSH into each instance and start the server.
 for inst_ip in instance_ips:
-    args = ['ssh', '-o', 'UserKnownHostsFile=/dev/null', '-o',
-            'StrictHostKeyChecking=no', '-i', KEYPAIR_PATH,
+    args = ['ssh',
+            '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'StrictHostKeyChecking=no',
+            '-o', 'KexAlgorithms=ecdh-sha2-nistp521',
+            '-i', KEYPAIR_PATH,
             f'ubuntu@{inst_ip}', 'bash -i -l']
     ssh_process = subprocess.Popen(args, stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, universal_newlines=True, bufsize=0)

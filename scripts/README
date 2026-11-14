@@ -18,3 +18,13 @@ workflow is:
 
  7: Run update_proxy.py so that the proxy server(s) will send web traffic to the
     appropriate machines.
+
+To launch one vanilla Ubuntu 26.04 amd64 builder for a new course AMI:
+
+    python scripts/launch_ubuntu_instance.py nea-build
+
+This resolves Canonical's current stable AMI in us-east-1, uses the existing
+key pair and security group, and allocates a 64-GiB gp3 root volume. Use
+--root-volume-gb 32 for a 32-GiB root volume or --dry-run to check launch
+permissions without creating an instance. See --help for other options.
+Copy for_notebook_server/nea to the builder and run its setup_ami.sh separately.

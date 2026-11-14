@@ -13,7 +13,7 @@ KEYPAIR_PATH = '/home/romano/.ssh/id_rsa'
 PROXY_IPS = ('184.73.99.182', )
 
 # Connect to EC2.
-ec2 = boto3.client('ec2')
+ec2 = boto3.client('ec2', region_name='us-east-1')
 
 # Get the group name from the commandline.
 groupname = sys.argv[1]
@@ -50,13 +50,17 @@ with open(f'{groupname}.conf', 'w') as fh:
 # Update each proxy server.
 for inst_ip in PROXY_IPS:
     # Copy the .conf file to the server.
-    args = ['scp', '-o', 'UserKnownHostsFile=/dev/null', '-o',
+    args = ['scp', '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'KexAlgorithms=ecdh-sha2-nistp521',
+            '-o',
             'StrictHostKeyChecking=no', '-i', KEYPAIR_PATH,
             f'{groupname}.conf', f'ec2-user@{inst_ip}:']
     subprocess.run(args)
 
     # SSH into the instance.
-    args = ['ssh', '-o', 'UserKnownHostsFile=/dev/null', '-o',
+    args = ['ssh', '-o', 'UserKnownHostsFile=/dev/null',
+            '-o', 'KexAlgorithms=ecdh-sha2-nistp521',
+            '-o',
             'StrictHostKeyChecking=no', '-i',
             KEYPAIR_PATH, f'ec2-user@{inst_ip}',
             'bash -i']
