@@ -49,7 +49,7 @@ def build_configuration(instances):
     entries = []
     hostnames = set()
     for instance in instances:
-        if instance['State']['Name'] != 'running':
+        if instance['State']['Name'] not in {'pending', 'running'}:
             continue
         hostname = get_aws_tag(instance.get('Tags', []), 'ws_hostname')
         if not hostname or not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', hostname):
@@ -57,6 +57,8 @@ def build_configuration(instances):
         if hostname in hostnames:
             raise ValueError(f'Duplicate ws_hostname tag: {hostname}')
         hostnames.add(hostname)
+        if not instance.get('PrivateIpAddress'):
+            raise ValueError(f"Instance {instance['InstanceId']} has no private IP address yet")
         ip = ipaddress.IPv4Address(instance['PrivateIpAddress'])
         entries.append(
             'server {\n'
@@ -68,7 +70,7 @@ def build_configuration(instances):
             '  }\n'
             '}\n\n')
     if not entries:
-        raise ValueError('No running instances found; the proxy configuration was left unchanged')
+        raise ValueError('No pending or running instances found; the proxy configuration was left unchanged')
     return ''.join(entries)
 
 

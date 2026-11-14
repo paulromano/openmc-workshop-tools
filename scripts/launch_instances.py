@@ -2,17 +2,18 @@
 
 Each instance receives ws_group and a unique ws_hostname tag during launch.
 Names follow the existing group0, group1, etc. convention, skipping names
-already assigned in the group. The launcher waits for the new instances to
-run and updates the NGINX proxy. Run only one launcher per group at a time.
+already assigned in the group. The launcher updates the NGINX proxy as soon
+as private IPs are assigned. Run only one launcher per group at a time.
 """
 
 import argparse
 import subprocess
 import sys
+import time
 import uuid
 
 import boto3
-from botocore.exceptions import ClientError, WaiterError
+from botocore.exceptions import ClientError
 
 from update_proxy import update_proxy, validate_group
 from utils import get_group_instances, unused_hostnames
@@ -40,12 +41,41 @@ IMAGE_ID = 'ami-0832e5041637c8074' # NEA Course 2026-11
 KEYPAIR_NAME = 'X1 Carbon 2022'
 SECURITY_GROUP = 'sg-130bcb6b'
 
+
+def ensure_private_ips(ec2, instances):
+    """Use launch-time addresses, retrying only instances with missing IPs."""
+    by_id = {instance['InstanceId']: instance for instance in instances}
+    for attempt in range(31):
+        for instance in by_id.values():
+            if instance['State']['Name'] not in {'pending', 'running'}:
+                raise RuntimeError(f"Instance {instance['InstanceId']} is no longer pending or running")
+        missing = [instance_id for instance_id, instance in by_id.items()
+                   if not instance.get('PrivateIpAddress')]
+        if not missing:
+            return list(by_id.values())
+        if attempt == 30:
+            raise RuntimeError(f"Private IPs are still missing for: {', '.join(missing)}")
+        if attempt == 0:
+            print('Checking EC2 for missing private IP addresses...', flush=True)
+        else:
+            time.sleep(2)
+        try:
+            response = ec2.describe_instances(InstanceIds=missing)
+        except ClientError as exc:
+            if exc.response['Error']['Code'] == 'InvalidInstanceID.NotFound':
+                continue  # A newly created instance can take time to appear.
+            raise
+        for reservation in response['Reservations']:
+            for instance in reservation['Instances']:
+                by_id[instance['InstanceId']] = instance
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('groupname')
     parser.add_argument('n_instances', type=int)
     parser.add_argument('--skip-proxy', action='store_true',
-                        help='Launch and tag instances without waiting or updating the proxy')
+                        help='Launch and tag instances without updating the proxy')
     args = parser.parse_args(argv)
     if args.n_instances <= 0:
         parser.error('n_instances must be positive')
@@ -55,6 +85,7 @@ def main(argv=None):
     existing = get_group_instances(ec2, args.groupname)
     hostnames = unused_hostnames(args.groupname, existing)
     launched = {}
+    launched_instances = []
 
     for _ in range(args.n_instances):
         hostname = next(hostnames)
@@ -77,6 +108,7 @@ def main(argv=None):
         )
         instance = response['Instances'][0]
         launched[instance['InstanceId']] = hostname
+        launched_instances.append(instance)
         print(f"{hostname}: {instance['InstanceId']} "
               f"{instance.get('PrivateIpAddress', '(private IP pending)')}", flush=True)
 
@@ -85,16 +117,8 @@ def main(argv=None):
         return
 
     try:
-        print('Waiting for the new instances to be running before updating the proxy...', flush=True)
-        ec2.get_waiter('instance_running').wait(InstanceIds=list(launched))
-        response = ec2.describe_instances(InstanceIds=list(launched))
-        new_instances = [instance for reservation in response['Reservations']
-                         for instance in reservation['Instances']]
-        if {instance['InstanceId'] for instance in new_instances} != set(launched):
-            raise RuntimeError('EC2 did not return all newly launched instances')
+        new_instances = ensure_private_ips(ec2, launched_instances)
         for instance in new_instances:
-            if instance['State']['Name'] != 'running' or not instance.get('PrivateIpAddress'):
-                raise RuntimeError(f"Instance {instance['InstanceId']} is not running with a private IP")
             # These tags were attached at creation; use the known names even
             # if DescribeInstances has not yet returned the new tags.
             instance['Tags'] = [tag for tag in instance.get('Tags', []) if tag['Key'] != 'ws_hostname']
@@ -102,7 +126,7 @@ def main(argv=None):
         current_group = get_group_instances(ec2, args.groupname)
         current_group = [instance for instance in current_group if instance['InstanceId'] not in launched]
         update_proxy(args.groupname, instances=current_group + new_instances)
-    except (ClientError, WaiterError, subprocess.CalledProcessError, ValueError, RuntimeError, KeyError, OSError):
+    except (ClientError, subprocess.CalledProcessError, ValueError, RuntimeError, KeyError, OSError):
         print('The instances have already been launched. After resolving the error, retry only '
               f'the proxy update: python scripts/update_proxy.py {args.groupname}', file=sys.stderr)
         raise

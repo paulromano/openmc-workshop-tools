@@ -15,15 +15,17 @@ workflow is:
     hydrogen0 during launch. Existing names in the group are preserved and
     skipped. Run only one launcher per group at a time to avoid duplicate names.
 
-    The launcher waits for the new instances to be running, then updates and
-    reloads the NGINX proxy automatically. It uses the newly launched instance
-    IDs so delayed group-tag visibility cannot omit them from the proxy config.
-    Existing running instances in the group remain in the proxy configuration.
+    The launcher uses the private IPs returned at launch to update and reload
+    the NGINX proxy immediately, including while instances are still pending.
+    If an address is missing, it checks EC2 for that instance for up to about a
+    minute. It never waits for the running state. Delayed group-tag visibility
+    cannot omit the new instances from the proxy configuration. Other pending
+    and running instances in the group are included too.
 
     Jupyter starts automatically on the new NEA AMI and may need a little longer
     to finish starting after the proxy is updated.
 
-Use --skip-proxy to launch and tag instances without waiting or changing NGINX:
+Use --skip-proxy to launch and tag instances without changing NGINX:
 
     python scripts/launch_instances.py hydrogen 10 --skip-proxy
 
