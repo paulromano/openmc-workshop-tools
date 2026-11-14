@@ -88,6 +88,11 @@ hosts to quickly add new instances if needed.) The proxy server can also perform
     files.
   + Add the the "loc_templ.conf" and "server_templ.conf" files (from the
     openmc-workshop-tools repo) to the templ subdirectory
+  + Add "for_proxy_server/conf.d/server_names_hash.conf" to /etc/nginx/conf.d.
+    It sets server_names_hash_max_size to 8192 in the http context so the saved
+    course-group hostnames fit without the "could not build optimal
+    server_names_hash" warning. This value passed nginx -t on the course proxy
+    with approximately 465 server_name entries; 2048 and 4096 still warned.
   + Add the "main.conf" file to the conf.d directory. This file will redirect
     HTTP requests to HTTPS. It also includes a configuration for the domain
     name "welcome.openmcworkshop.org" that is meant to redirect to the
