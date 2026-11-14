@@ -1,4 +1,6 @@
-> Created: 2026-11-14; Producer: Codex / GPT-6.1-Sol high
+> Created: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
+> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
+> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high
 
 # Build an Ubuntu 26.04 AMI for the NEA OpenMC course
 
@@ -157,9 +159,25 @@ After this cleanup, keep the builder stopped until its image has been created. R
 
 ## 6. Create the AMI
 
-In the EC2 console in `us-east-1`, select the stopped builder and choose **Actions → Image and templates → Create image**. Use a name such as `OpenMC NEA Course 2026-11 v1` and a description recording the OS, OpenMC version, and course branch.
+**Local:** use [scripts/create_ami.py](../scripts/create_ami.py) to create the image with boto3. Check AWS permissions, then create the AMI:
 
-Suggested image and snapshot tags are:
+```bash
+python scripts/create_ami.py --name "OpenMC NEA Course 2026-11 v1" --dry-run
+python scripts/create_ami.py --name "OpenMC NEA Course 2026-11 v1"
+```
+
+The script defaults to `us-east-1` and selects the single running, stopping, or stopped instance tagged `ws_group=nea-build`. If shutdown from step 5 is still in progress, it waits up to 10 minutes for the builder to stop, including during a dry run. It refuses to proceed if multiple builders match. Use `--group OTHER_GROUP` for another builder group, or select an instance explicitly:
+
+```bash
+python scripts/create_ami.py --instance-id i-YOUR_BUILDER_ID \
+    --name "OpenMC NEA Course 2026-11 v1"
+```
+
+The script prints the AMI ID and console link immediately, then waits up to 60 minutes for the AMI to become available. Use `--no-wait` to return after submitting the request. Interrupting the wait leaves image creation running in AWS; use the printed AMI ID to check its state before retrying. Choose a new image name for each build.
+
+For this workflow, complete step 5 and leave the builder stopped. The script also accepts running instances: EC2 reboots them by default to flush disk writes before taking snapshots. `--no-reboot` skips that reboot, but snapshots of a running instance can omit buffered writes. The script creates the image and tags; perform the disk cleanup in step 5 separately. See the [boto3 CreateImage documentation](https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/create_image.html).
+
+The script applies these default tags to both the image and its snapshots, along with `Name` and `SourceInstanceId`:
 
 | Key | Value |
 | --- | --- |
@@ -168,7 +186,9 @@ Suggested image and snapshot tags are:
 | `OpenMCVersion` | `0.16.0` |
 | `CourseBranch` | `inperson-2026-11` |
 
-Creating the image takes snapshots of the instance's EBS volumes and registers a new AMI. Wait for the AMI state to become **Available** and record its AMI ID. See [AWS's AMI creation instructions](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/creating-an-ami-ebs.html).
+The version and branch tags describe the default setup recipe; the script does not detect installed versions. Override them when using a different recipe, for example `--tag OpenMCVersion=0.17.0`. Use `--description "..."` to supply your own description; otherwise it records the tagged OS, Python, OpenMC, and branch versions.
+
+Creating the image takes snapshots of the instance's EBS volumes and registers a new AMI. The script preserves the instance's volume configuration. Record the AMI ID once its state is **Available**. As a console alternative, select the stopped builder in EC2 and choose **Actions → Image and templates → Create image**. See [AWS's AMI creation instructions](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/creating-an-ami-ebs.html).
 
 ## 7. Test a fresh instance and update the course launcher
 
