@@ -22,7 +22,7 @@ REGION = 'us-east-1'
 DEFAULT_TAGS = {
     'UbuntuVersion': '26.04',
     'PythonVersion': '3.14',
-    'OpenMCVersion': '0.16.0',
+    'OpenMCVersion': 'develop',
     'CourseBranch': 'inperson-2026-11',
 }
 

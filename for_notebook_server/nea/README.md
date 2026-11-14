@@ -1,4 +1,5 @@
 > Created: 2026-11-13; Producer: Codex / GPT-6.1-Sol high\
+> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
 > Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high
 
 # NEA course AMI setup
@@ -36,7 +37,7 @@ The script installs and upgrades Ubuntu packages. Native builds and the roughly 
 | --- | --- |
 | OS | Ubuntu 26.04, amd64 |
 | Python | Ubuntu-packaged 3.14 |
-| OpenMC | `v0.16.0` |
+| OpenMC | Latest `develop` branch at build time |
 | MOAB | `5.5.1`, with PyMOAB disabled |
 | Double-Down | `v1.1.0` |
 | DAGMC | `v3.2.4`, with Double-Down and mesh tallies |
@@ -50,7 +51,7 @@ The script installs and upgrades Ubuntu packages. Native builds and the roughly 
 
 Python 3.15 became stable on October 9, 2026, and current VTK packages include Python 3.15 wheels. Python 3.14 is the default here because Ubuntu 26.04 supplies it and OpenMC 0.16.0 explicitly lists support for it. See [Python's release page](https://www.python.org/downloads/release/python-3150/), [VTK packages](https://pypi.org/project/vtk/), and [OpenMC's Python requirements](https://github.com/openmc-dev/openmc/blob/v0.16.0/pyproject.toml). Setting `PYTHON_VERSION` selects another interpreter only if its Ubuntu packages are available in the builder's configured repositories; the script does not add Python repositories or compile Python.
 
-The source versions above are configurable through `OPENMC_REF`, `MOAB_REF`, `DOUBLE_DOWN_REF`, `DAGMC_REF`, `LIBMESH_REF`, and `NJOY_REF`. They accept cloneable branches or tags. Use pinned release tags for repeatable builds. Python's direct package versions are in `requirements.txt`; the completed build saves all resolved versions.
+The source versions above are configurable through `OPENMC_REF`, `MOAB_REF`, `DOUBLE_DOWN_REF`, `DAGMC_REF`, `LIBMESH_REF`, and `NJOY_REF`. They accept cloneable branches or tags. OpenMC defaults to the latest `develop` commit at build time, and `/opt/nea/build-records/revisions.txt` records the exact commit used. To build the released OpenMC 0.16.0 instead, run `OPENMC_REF=v0.16.0 bash setup_ami.sh`. Python's direct package versions are in `requirements.txt`; the completed build saves all resolved versions.
 
 Other options are environment variables:
 

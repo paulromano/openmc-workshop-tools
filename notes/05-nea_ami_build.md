@@ -1,5 +1,6 @@
 > Created: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
 > Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
+> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
 > Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high
 
 # Build an Ubuntu 26.04 AMI for the NEA OpenMC course
@@ -90,7 +91,7 @@ cd ~/nea-ami
 bash setup_ami.sh
 ```
 
-The defaults are Python 3.14, OpenMC 0.16.0, the updated native dependencies, and the `inperson-2026-11` course branch. The script prompts for the Jupyter password after installing the Python packages. Its Jupyter service is enabled at boot and started at the end of a successful setup. See the [recipe README](../for_notebook_server/nea/README.md) for version pins and options.
+The defaults are Python 3.14, the latest OpenMC `develop` branch at build time, the updated native dependencies, and the `inperson-2026-11` course branch. The exact OpenMC commit is saved in `/opt/nea/build-records/revisions.txt`. The script prompts for the Jupyter password after installing the Python packages. Its Jupyter service is enabled at boot and started at the end of a successful setup. See the [recipe README](../for_notebook_server/nea/README.md) for version pins and options.
 
 Detach from tmux with **Ctrl+B**, then **D**. To reconnect, use `ssh -A ubuntu@HOST`, then `tmux attach -t nea-build`. The forwarded SSH agent belongs to the SSH connection; after reconnecting, check GitHub access again before retrying any private-repository operations inside an older tmux shell.
 
@@ -183,7 +184,7 @@ The script applies these default tags to both the image and its snapshots, along
 | --- | --- |
 | `UbuntuVersion` | `26.04` |
 | `PythonVersion` | `3.14` |
-| `OpenMCVersion` | `0.16.0` |
+| `OpenMCVersion` | `develop` |
 | `CourseBranch` | `inperson-2026-11` |
 
 The version and branch tags describe the default setup recipe; the script does not detect installed versions. Override them when using a different recipe, for example `--tag OpenMCVersion=0.17.0`. Use `--description "..."` to supply your own description; otherwise it records the tagged OS, Python, OpenMC, and branch versions.
