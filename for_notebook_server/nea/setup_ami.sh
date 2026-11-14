@@ -160,6 +160,29 @@ mkdir "$BUILD_DIR/libmesh/build"
 cp "$BUILD_DIR/libmesh/build/config.log" "$RECORD_DIR/libmesh-config.log"
 # Find the installed libngcore.so beside libnglib.so instead of in the build tree.
 patchelf --set-rpath "\$ORIGIN" "$SOFTWARE_DIR/libmesh/lib/libnglib.so"
+# Remove build-directory search paths while preserving other installed paths.
+"$PYTHON" - "$SOFTWARE_DIR/libmesh" "$NEA_ROOT/build." <<'PY'
+from pathlib import Path
+import subprocess
+import sys
+
+for path in Path(sys.argv[1]).rglob('*'):
+    if path.is_symlink() or not path.is_file():
+        continue
+    with path.open('rb') as f:
+        if f.read(4) != b'\x7fELF':
+            continue
+    result = subprocess.run(['patchelf', '--print-rpath', str(path)],
+                            capture_output=True, text=True)
+    if result.returncode:
+        continue  # Static ELF files have no dynamic search path.
+    old = result.stdout.rstrip('\n')
+    new = ':'.join(p for p in old.split(':') if not p.startswith(sys.argv[2]))
+    if new != old:
+        options = ['--set-rpath', new] if new else ['--remove-rpath']
+        subprocess.run(['patchelf', *options, str(path)], check=True)
+        print(f'Removed build-directory search paths from {path}')
+PY
 
 clone_source njoy2016 https://github.com/njoy/NJOY2016 "$NJOY_REF"
 cmake -S "$BUILD_DIR/njoy2016" -B "$BUILD_DIR/njoy2016/build" \
@@ -228,12 +251,29 @@ cp "$BUILD_DIR/revisions.txt" "$RECORD_DIR/revisions.txt"
 printf 'course %s %s\n' "$COURSE_BRANCH" "$(git -C "$COURSE_DIR" rev-parse HEAD)" >> "$RECORD_DIR/revisions.txt"
 install -m 644 "$SCRIPT_DIR/setup_ami.sh" "$SCRIPT_DIR/requirements.txt" "$SCRIPT_DIR/moab_endian.patch" "$RECORD_DIR/"
 
-# Verify both executable and in-memory transport before enabling the service.
+# Verify without access to the build tree before enabling the service.
 set -a
 # shellcheck source=/dev/null
 source "$HOME/.config/openmc-nea/environment"
 set +a
-"$PYTHON" "$NEA_ROOT/nea_environment.py" verify --root "$NEA_ROOT" --transport
+(
+    hidden_build="$BUILD_DIR.unavailable"
+    [[ ! -e $hidden_build ]] || { echo "Already exists: $hidden_build" >&2; exit 1; }
+    mv -- "$BUILD_DIR" "$hidden_build"
+    trap 'mv -- "$hidden_build" "$BUILD_DIR"' EXIT
+    dependencies=$(env -u LD_LIBRARY_PATH ldd \
+        "$SOFTWARE_DIR/libmesh/lib/libnglib.so" \
+        "$SOFTWARE_DIR/libmesh/lib/libmesh_opt.so" \
+        "$SOFTWARE_DIR/libmesh/bin/meshtool-opt")
+    printf '%s\n' "$dependencies"
+    if grep -Fq "$NEA_ROOT/build." <<< "$dependencies" || \
+            grep -Fq 'not found' <<< "$dependencies"; then
+        echo 'libMesh dependencies require repair before creating the AMI.' >&2
+        exit 1
+    fi
+    env -u LD_LIBRARY_PATH "$SOFTWARE_DIR/libmesh/bin/output_libmesh_version-opt"
+    "$PYTHON" "$NEA_ROOT/nea_environment.py" verify --root "$NEA_ROOT" --transport
+)
 "$SOFTWARE_DIR/openmc/bin/openmc" --version > "$RECORD_DIR/openmc-version.txt"
 # Repair logs made by the older service, which opened them as root.
 if [[ -f $HOME/notebook_launch.log ]]; then
