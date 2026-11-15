@@ -40,6 +40,7 @@ IMAGE_ID = 'ami-0832e5041637c8074' # NEA Course 2026-11
 
 KEYPAIR_NAME = 'X1 Carbon 2022'
 SECURITY_GROUP = 'sg-130bcb6b'
+INSTANCE_TYPE = 'c7i-flex.large'
 
 
 def ensure_private_ips(ec2, instances):
@@ -96,7 +97,7 @@ def main(argv=None):
             ImageId=IMAGE_ID,
             MinCount=1,
             MaxCount=1,
-            InstanceType='c7i-flex.large',
+            InstanceType=INSTANCE_TYPE,
             KeyName=KEYPAIR_NAME,
             SecurityGroupIds=[SECURITY_GROUP],
             TagSpecifications=[{

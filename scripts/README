@@ -1,5 +1,80 @@
-These scripts are used to manage a set of AWS instances for the workshop. The
-workflow is:
+These scripts are used to manage a set of AWS instances for the workshop.
+
+EC2 dashboard
+-------------
+
+Install the script dependencies with Python 3.10 or newer, then open the TUI:
+
+    python -m pip install -r scripts/requirements.txt
+    python scripts/dashboard.py
+
+To select a group initially or change the 30-second refresh interval:
+
+    python scripts/dashboard.py --group student --refresh-interval 60
+
+The dashboard uses the same AWS credentials and us-east-1 region as the launcher.
+To use a named AWS profile, set AWS_PROFILE when starting it:
+
+    AWS_PROFILE=course python scripts/dashboard.py
+
+Groups are discovered from ws_group tags. Select student, instructor, or another
+group in the dropdown. The table shows hostname, state, EC2 system and instance
+checks, private IP, instance ID, type, and public DNS. Stopped and pending
+instances are included; terminated instances are excluded. Use the arrow keys
+to select a row and scroll horizontally. The selected instance's addresses and
+ID also appear below the table.
+
+Keyboard shortcuts (buttons also support the mouse):
+
+    g       Open the group selector
+    r       Refresh now
+    b       Reboot the selected running instance, after confirmation
+    s       Start the selected stopped instance, after confirmation
+    n       Launch a new group, or add instances to an existing group
+    l       Show or hide the activity log
+    q       Quit
+    Escape  Cancel a dialog
+
+Reboot requests use EC2 RebootInstances. EC2 can continue to show "running"
+during a reboot. AWS attempts a hard reboot if the instance cannot shut down
+cleanly within a few minutes. A reboot interrupts the student's session and
+clears kernel memory; saved files remain on disk. EC2 checks report host and OS
+health, so a notebook can hang while both checks report "ok". The dashboard does
+not measure memory usage or test Jupyter responsiveness. See:
+
+    https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/reboot_instances.html
+    https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/describe_instance_status.html
+
+Launch group asks for a group name and count, shows the configured AMI and
+instance type, and runs launch_instances.py with those settings. Proxy updates
+are enabled by default; select "Skip NGINX proxy update" to omit that step.
+Launcher output and errors open the Activity panel. Press l to hide it and give
+the instance table more room. If a launch partially fails,
+instances that were already created remain in AWS. Check the table and output
+before retrying. If only the proxy update failed, run update_proxy.py GROUP.
+Run one launcher per group at a time, including launchers in other terminals.
+Wait for an active operation to finish before quitting the dashboard.
+
+EC2 queries run in a background worker without overlapping refreshes. Each
+refresh reads the tagged instances and batches health queries for running
+instances (at most 100 IDs per request), following all response pages. The UI
+sleeps between updates. The minimum refresh interval is 5 seconds. A failed
+refresh keeps the last table visible, marks it STALE, and disables instance
+actions until a refresh succeeds. If only health queries fail, addresses and
+states still update and unavailable checks appear as "unknown".
+
+AWS access needs ec2:DescribeInstances and ec2:DescribeInstanceStatus for the
+table, ec2:RebootInstances for reboot, and ec2:StartInstances for start. Launch
+uses the existing launcher's EC2 permissions and proxy SSH configuration.
+
+Run the local tests with the dependencies installed (AWS calls are stubbed):
+
+    python -m unittest discover -s scripts/tests -v
+
+Script workflow
+---------------
+
+The command-line workflow is:
 
  1: (no scripts for this) start the proxy server(s) and the server for the URL
     app.
