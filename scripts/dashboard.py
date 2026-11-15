@@ -109,34 +109,38 @@ class LaunchGroup(ModalScreen[LaunchRequest | None]):
         self.dismiss(None)
 
 
-class ConfirmTermination(ModalScreen[bool]):
+class ConfirmSelection(ModalScreen[bool]):
     BINDINGS = [('escape', 'cancel', 'Cancel')]
 
-    def __init__(self, instances, whole_group=False):
+    def __init__(self, action, instances):
         super().__init__()
+        self.operation = action
         self.instances = instances
-        self.whole_group = whole_group
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes='dialog termination-dialog'):
-            title = (f'Terminate group {self.instances[0].group}?'
-                     if self.whole_group else f'Terminate {len(self.instances)} selected instances?')
-            yield Static(title, classes='dialog-title', markup=False)
+        with Vertical(classes='dialog selection-dialog'):
+            yield Static(f'{self.operation.capitalize()} {len(self.instances)} selected instances?',
+                         classes='dialog-title', markup=False)
             yield Static(f'Group: {self.instances[0].group}  |  {len(self.instances)} instances',
                          markup=False)
-            yield Static('Termination is permanent. Data on disks configured for deletion, '
-                         'including saved notebooks on those disks, will be lost.')
-            with VerticalScroll(id='termination-list'):
+            if self.operation == 'reboot':
+                yield Static('Rebooting interrupts the selected sessions and clears kernel memory. '
+                             'Saved files remain on disk.')
+            else:
+                yield Static('Termination is permanent. Data on disks configured for deletion, '
+                             'including saved notebooks on those disks, will be lost.')
+            with VerticalScroll(id='reviewed-instances'):
                 yield Static('\n'.join(f'{instance.hostname}  {instance.instance_id}  ({instance.state})'
                                        for instance in self.instances), markup=False)
             with Horizontal(classes='dialog-buttons'):
                 yield Button('Cancel', id='cancel')
-                yield Button('Terminate', id='terminate-confirm', variant='error')
+                yield Button(self.operation.capitalize(), id='confirm-selection',
+                             variant='warning' if self.operation == 'reboot' else 'error')
 
     def on_mount(self):
         self.query_one('#cancel', Button).focus()
 
-    @on(Button.Pressed, '#terminate-confirm')
+    @on(Button.Pressed, '#confirm-selection')
     def confirm(self):
         self.dismiss(True)
 
@@ -154,7 +158,6 @@ class Dashboard(App):
         ('s', 'start_instance', 'Start'),
         ('n', 'launch', 'Launch'),
         ('t', 'terminate_selected', 'Terminate'),
-        Binding('T', 'terminate_group', 'Terminate group', show=False),
         Binding('space', 'toggle_mark', 'Select row', show=False),
         Binding('a', 'select_all', 'Select all', show=False),
         Binding('c', 'clear_marks', 'Clear selection', show=False),
@@ -176,7 +179,7 @@ class Dashboard(App):
     #refresh-status { height: auto; max-height: 3; margin: 0 2; }
     #health-hint { height: 1; margin: 0 2; color: $text-muted; }
     #activity { display: none; height: 6; margin: 0 1; border: solid $primary; }
-    ConfirmInstance, LaunchGroup, ConfirmTermination {
+    ConfirmInstance, LaunchGroup, ConfirmSelection {
         align: center middle; background: $background 70%;
     }
     .dialog {
@@ -194,8 +197,8 @@ class Dashboard(App):
     .dialog-buttons { height: 3; margin-top: 1; align-horizontal: right; }
     .dialog-buttons Button { margin-left: 1; }
     #launch-error { color: $error; height: auto; max-height: 4; }
-    .termination-dialog { height: 24; }
-    #termination-list { height: 1fr; min-height: 2; border: solid $primary; margin-top: 1; }
+    .selection-dialog { height: 24; }
+    #reviewed-instances { height: 1fr; min-height: 2; border: solid $primary; margin-top: 1; }
     '''
 
     def __init__(self, group=None, refresh_interval=30, service=None):
@@ -219,14 +222,13 @@ class Dashboard(App):
             yield Label('Group')
             yield Select([], prompt='Select a group', id='groups')
             yield Button('Refresh', id='refresh')
-            yield Button('Reboot', id='reboot', disabled=True)
             yield Button('Start', id='start', disabled=True)
             yield Button('Launch group', id='launch', variant='primary')
         with Horizontal(id='selectionbar'):
             yield Button('Select all', id='select-all', compact=True, disabled=True)
             yield Button('Clear', id='clear-marks', compact=True, disabled=True)
-            yield Button('Terminate row', id='terminate-selected', variant='error', compact=True, disabled=True)
-            yield Button('Terminate group', id='terminate-group', variant='error', compact=True, disabled=True)
+            yield Button('Reboot', id='reboot', variant='warning', compact=True, disabled=True)
+            yield Button('Terminate', id='terminate', variant='error', compact=True, disabled=True)
             yield Static('0 selected', id='selection-count', markup=False)
         yield Static('Loading course instances…', id='summary', markup=False)
         yield InstanceTable(id='instances', cursor_type='row', zebra_stripes=True)
@@ -250,8 +252,7 @@ class Dashboard(App):
         self.launch_button = self.query_one('#launch', Button)
         self.select_all_button = self.query_one('#select-all', Button)
         self.clear_marks_button = self.query_one('#clear-marks', Button)
-        self.terminate_button = self.query_one('#terminate-selected', Button)
-        self.terminate_group_button = self.query_one('#terminate-group', Button)
+        self.terminate_button = self.query_one('#terminate', Button)
         self.selection_count = self.query_one('#selection-count', Static)
         self.activity.border_title = 'Activity'
         self.table.border_subtitle = 'Space/Enter: select · a: all · c: clear'
@@ -371,17 +372,18 @@ class Dashboard(App):
             self.details.update('No instances in this group. Use Launch group to create instances.'
                                 if self.snapshot is not None else 'Waiting for course instances.')
         ready = instance is not None and not self.operation and not self.refresh_error
-        self.reboot_button.disabled = not (ready and instance.state == 'running')
         self.start_button.disabled = not (ready and instance.state == 'stopped')
         self.launch_button.disabled = bool(self.operation)
-        can_terminate = not self.operation and not self.refresh_error
+        selected = self.marked_instances
+        can_change = bool(selected) and not self.operation and not self.refresh_error
+        running = all(item.state == 'running' for item in selected)
+        self.reboot_button.disabled = not (can_change and running)
+        self.reboot_button.tooltip = ('Reboot the selected instances' if running else
+                                      'Reboot requires every selected instance to be running')
         eligible = any(item.state in TERMINATABLE_STATES for item in self.shown_instances)
         self.select_all_button.disabled = not eligible or bool(self.operation)
         self.clear_marks_button.disabled = not self.marked_ids or bool(self.operation)
-        self.terminate_button.disabled = not (can_terminate and self.termination_selection)
-        self.terminate_group_button.disabled = not (can_terminate and eligible)
-        self.terminate_button.label = (f'Terminate ({len(self.marked_ids)})'
-                                       if self.marked_ids else 'Terminate row')
+        self.terminate_button.disabled = not can_change
         self.selection_count.update(f'{len(self.marked_ids)} selected')
 
     def mark_text(self, instance):
@@ -390,11 +392,8 @@ class Dashboard(App):
         return Text('[x]' if instance.instance_id in self.marked_ids else '[ ]')
 
     @property
-    def termination_selection(self):
-        if self.marked_ids:
-            return tuple(item for item in self.shown_instances if item.instance_id in self.marked_ids)
-        instance = self.selected_instance
-        return (instance,) if instance and instance.state in TERMINATABLE_STATES else ()
+    def marked_instances(self):
+        return tuple(item for item in self.shown_instances if item.instance_id in self.marked_ids)
 
     def update_marks(self):
         for instance in self.shown_instances:
@@ -458,7 +457,7 @@ class Dashboard(App):
 
     @on(Button.Pressed, '#reboot')
     def action_reboot(self):
-        self.confirm_instance_action('reboot', 'running')
+        self.confirm_selection('reboot')
 
     @on(Button.Pressed, '#start')
     def action_start_instance(self):
@@ -481,45 +480,50 @@ class Dashboard(App):
 
         self.push_screen(ConfirmInstance(action, instance), confirmed)
 
-    @on(Button.Pressed, '#terminate-selected')
+    @on(Button.Pressed, '#terminate')
     def action_terminate_selected(self):
-        self.confirm_termination(self.termination_selection)
+        self.confirm_selection('terminate')
 
-    @on(Button.Pressed, '#terminate-group')
-    def action_terminate_group(self):
-        self.confirm_termination(tuple(item for item in self.shown_instances
-                                       if item.state in TERMINATABLE_STATES), whole_group=True)
-
-    def confirm_termination(self, instances, whole_group=False):
+    def confirm_selection(self, action):
         if len(self.screen_stack) != 1 or self.operation:
             return
+        instances = self.marked_instances
         if not instances or self.refresh_error:
-            self.notify('Select instances in a refreshed table before terminating.', severity='warning')
+            self.notify(f'Select instances in a refreshed table before choosing {action}.', severity='warning')
+            return
+        if action == 'reboot' and any(item.state != 'running' for item in instances):
+            self.notify('Reboot requires every selected instance to be running.', severity='warning')
             return
 
         def confirmed(accepted):
             if accepted:
-                self.operation = f'Terminating {len(instances)} instances in {instances[0].group}'
-                # Keep the empty group selected after its last instance leaves.
-                self.remembered_groups.add(instances[0].group)
+                self.operation = f'{action.capitalize()} request for {len(instances)} instances in {instances[0].group}'
+                if action == 'terminate':
+                    # Keep the empty group selected after its last instance leaves.
+                    self.remembered_groups.add(instances[0].group)
                 self.update_selection()
                 self.update_refresh_status()
-                self.terminate_instances(instances)
+                self.change_selected_instances(action, instances)
 
-        self.push_screen(ConfirmTermination(instances, whole_group), confirmed)
+        self.push_screen(ConfirmSelection(action, instances), confirmed)
 
     @work(group='operation')
-    async def terminate_instances(self, instances):
+    async def change_selected_instances(self, action, instances):
+        label = 'Reboot' if action == 'reboot' else 'Termination'
         try:
-            await asyncio.to_thread(self.service.terminate_instances, instances)
+            operation = self.service.reboot_instances if action == 'reboot' else self.service.terminate_instances
+            await asyncio.to_thread(operation, instances)
             for instance in instances:
-                self.log_message(f'Termination requested for {instance.hostname} ({instance.instance_id}).')
+                self.log_message(f'{label} requested for {instance.hostname} ({instance.instance_id}).')
+            if action == 'reboot':
+                self.log_message('EC2 may still show running during a reboot; allow a few minutes for recovery.')
             self.marked_ids.difference_update(instance.instance_id for instance in instances)
             self.update_marks()
         except Exception as exc:
-            self.log_message(f'Termination failed: {exc}. Some instances may already be terminating. '
+            state = 'rebooting' if action == 'reboot' else 'terminating'
+            self.log_message(f'{label} failed: {exc}. Some instances may already be {state}. '
                              'Refresh the table before retrying.')
-            self.notify('Termination failed. See Activity and refresh before retrying.', severity='error')
+            self.notify(f'{label} failed. See Activity and refresh before retrying.', severity='error')
         finally:
             self.operation = ''
             self.update_selection()

@@ -135,16 +135,16 @@ class EC2Service:
         operation = self.ec2.reboot_instances if action == 'reboot' else self.ec2.start_instances
         operation(InstanceIds=[instance.instance_id])
 
-    def terminate_instances(self, instances):
-        """Recheck the reviewed IDs and group before requesting termination."""
+    def _review_instances(self, instances, action, allowed_states):
+        """Recheck all reviewed IDs, groups, and states before changing any."""
         if not instances:
-            raise ValueError('Select at least one instance to terminate.')
+            raise ValueError(f'Select at least one instance to {action}.')
         if len({instance.group for instance in instances}) != 1:
-            raise ValueError('Terminate instances from one group at a time.')
+            raise ValueError(f'{action.capitalize()} instances from one group at a time.')
         reviewed = {instance.instance_id: instance for instance in instances}
         instance_ids = list(reviewed)
         current = {}
-        # Read every instance before issuing any termination requests. The
+        # Read every instance before issuing any change requests. The
         # reviewed list stays fixed even if new instances join the group.
         for start in range(0, len(instance_ids), 1000):
             for page in self.ec2.get_paginator('describe_instances').paginate(
@@ -157,9 +157,20 @@ class EC2Service:
             if actual is None or get_aws_tag(actual.get('Tags', []), 'ws_group') != instance.group:
                 raise ValueError(f'{instance_id} is no longer in the reviewed group. '
                                  'Refresh the table and review the instances again.')
-            if actual['State']['Name'] not in TERMINATABLE_STATES:
+            if actual['State']['Name'] not in allowed_states:
                 raise ValueError(f"{instance_id} is now {actual['State']['Name']}. "
                                  'Refresh the table and review the instances again.')
+        return instance_ids
+
+    def reboot_instances(self, instances):
+        """Reboot only the reviewed running instances."""
+        instance_ids = self._review_instances(instances, 'reboot', {'running'})
+        for start in range(0, len(instance_ids), 1000):
+            self.ec2.reboot_instances(InstanceIds=instance_ids[start:start + 1000])
+
+    def terminate_instances(self, instances):
+        """Terminate only the reviewed instances."""
+        instance_ids = self._review_instances(instances, 'terminate', TERMINATABLE_STATES)
         for start in range(0, len(instance_ids), 1000):
             self.ec2.terminate_instances(InstanceIds=instance_ids[start:start + 1000])
 

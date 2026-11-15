@@ -31,9 +31,8 @@ Keyboard shortcuts (buttons also support the mouse):
     Space   Select or deselect the highlighted row (Enter or a click also works)
     a       Select all eligible instances in the current group
     c       Clear the selection
-    t       Terminate selected instances, or the highlighted row if none are selected
-    T       Terminate the current group
-    b       Reboot the highlighted running instance, after confirmation
+    t       Terminate the selected instances, after confirmation
+    b       Reboot the selected running instances, after confirmation
     s       Start the highlighted stopped instance, after confirmation
     n       Launch a new group, or add instances to an existing group
     l       Show or hide the activity log
@@ -50,22 +49,26 @@ not measure memory usage or test Jupyter responsiveness. See:
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/reboot_instances.html
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/describe_instance_status.html
 
-The Select column marks instances chosen for termination. Selections survive
-refreshes and clear when switching groups. Instances that disappear or begin
-shutting down are removed from the selection. Reboot and start use the
-highlighted row independently of the termination selection.
+The Select column marks instances chosen for reboot or termination. Selections
+survive refreshes and clear when switching groups. Instances that disappear or begin
+shutting down are removed from the selection. Reboot and Terminate require at
+least one checked row. Use Select all (a) followed by Reboot (b) or Terminate (t)
+to act on the current group. Reboot requires every selected instance to be
+running; deselect stopped or pending instances before rebooting. Start (s)
+continues to use the highlighted stopped instance.
 
-Terminate row, Terminate (N), and Terminate group open a confirmation showing
-the exact hostnames, instance IDs, group, and count. Termination is permanent;
+Reboot and Terminate open a confirmation showing the exact selected hostnames,
+instance IDs, group, and count. Termination is permanent;
 disks configured for deletion on termination, including notebook files on those
 disks, are deleted. Back up student work first. See:
 
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/terminate_instances.html
 
-The dashboard rechecks the reviewed IDs and group tags before termination.
-Group termination applies to the instances listed in the confirmation;
-instances launched later are excluded. Instances already shutting down are
-excluded too. The dashboard keeps the empty group selected after termination.
+The dashboard rechecks the reviewed IDs, group tags, and states before sending
+reboot or termination requests. Both actions apply to the instances listed in
+the confirmation; instances launched later are excluded. Successful requests
+clear the selection; failed requests keep it for review. The dashboard keeps
+the empty group selected after termination.
 AWS termination protection remains in effect. If a request fails, some
 instances may already be terminating; refresh the table before retrying.
 Termination leaves the existing NGINX proxy configuration in place.
