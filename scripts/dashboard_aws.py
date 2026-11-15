@@ -17,6 +17,12 @@ from utils import get_aws_tag
 REGION = 'us-east-1'
 LIVE_STATES = ['pending', 'running', 'stopping', 'stopped', 'shutting-down']
 TERMINATABLE_STATES = {'pending', 'running', 'stopping', 'stopped'}
+ACTION_STATES = {
+    'start': {'stopped'},
+    'stop': {'running'},
+    'reboot': {'running'},
+    'terminate': TERMINATABLE_STATES,
+}
 
 
 @dataclass(frozen=True)
@@ -118,23 +124,6 @@ class EC2Service:
             ))
         return FleetSnapshot(tuple(sorted(result, key=hostname_order)), health_error)
 
-    def change_state(self, action, instance):
-        """Recheck the selected instance's group and state before changing it."""
-        required_states = {'reboot': 'running', 'start': 'stopped'}
-        if action not in required_states:
-            raise ValueError(f'Unknown instance action: {action}')
-        response = self.ec2.describe_instances(InstanceIds=[instance.instance_id])
-        current = [item for reservation in response['Reservations']
-                   for item in reservation['Instances']
-                   if item['InstanceId'] == instance.instance_id]
-        if not current or get_aws_tag(current[0].get('Tags', []), 'ws_group') != instance.group:
-            raise ValueError('The instance is no longer in the selected group. Refresh the table.')
-        state = current[0]['State']['Name']
-        if state != required_states[action]:
-            raise ValueError(f'The instance is now {state}. Refresh the table before trying again.')
-        operation = self.ec2.reboot_instances if action == 'reboot' else self.ec2.start_instances
-        operation(InstanceIds=[instance.instance_id])
-
     def _review_instances(self, instances, action, allowed_states):
         """Recheck all reviewed IDs, groups, and states before changing any."""
         if not instances:
@@ -162,17 +151,27 @@ class EC2Service:
                                  'Refresh the table and review the instances again.')
         return instance_ids
 
+    def _change_instances(self, action, instances):
+        instance_ids = self._review_instances(instances, action, ACTION_STATES[action])
+        operation = getattr(self.ec2, f'{action}_instances')
+        for start in range(0, len(instance_ids), 1000):
+            operation(InstanceIds=instance_ids[start:start + 1000])
+
+    def start_instances(self, instances):
+        """Start only the reviewed stopped instances."""
+        self._change_instances('start', instances)
+
+    def stop_instances(self, instances):
+        """Request a normal shutdown of the reviewed running instances."""
+        self._change_instances('stop', instances)
+
     def reboot_instances(self, instances):
         """Reboot only the reviewed running instances."""
-        instance_ids = self._review_instances(instances, 'reboot', {'running'})
-        for start in range(0, len(instance_ids), 1000):
-            self.ec2.reboot_instances(InstanceIds=instance_ids[start:start + 1000])
+        self._change_instances('reboot', instances)
 
     def terminate_instances(self, instances):
         """Terminate only the reviewed instances."""
-        instance_ids = self._review_instances(instances, 'terminate', TERMINATABLE_STATES)
-        for start in range(0, len(instance_ids), 1000):
-            self.ec2.terminate_instances(InstanceIds=instance_ids[start:start + 1000])
+        self._change_instances('terminate', instances)
 
 
 async def launch_group(request, output):

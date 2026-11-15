@@ -33,7 +33,8 @@ Keyboard shortcuts (buttons also support the mouse):
     c       Clear the selection
     t       Terminate the selected instances, after confirmation
     b       Reboot the selected running instances, after confirmation
-    s       Start the highlighted stopped instance, after confirmation
+    s       Start the selected stopped instances, after confirmation
+    S       Stop the selected running instances, after confirmation (Shift+S)
     n       Launch a new group, or add instances to an existing group
     l       Show or hide the activity log
     q       Quit
@@ -49,23 +50,32 @@ not measure memory usage or test Jupyter responsiveness. See:
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/reboot_instances.html
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/describe_instance_status.html
 
-The Select column marks instances chosen for reboot or termination. Selections
-survive refreshes and clear when switching groups. Instances that disappear or begin
-shutting down are removed from the selection. Reboot and Terminate require at
-least one checked row. Use Select all (a) followed by Reboot (b) or Terminate (t)
-to act on the current group. Reboot requires every selected instance to be
-running; deselect stopped or pending instances before rebooting. Start (s)
-continues to use the highlighted stopped instance.
+The Select column marks instances for Start, Stop, Reboot, and Terminate.
+Selections survive refreshes and clear when switching groups. Instances that
+disappear or begin shutting down are removed from the selection. All four
+actions require at least one checked row. Use Select all (a) followed by an
+action to operate on the current group. Start requires every selected instance
+to be stopped; Stop and Reboot require every selected instance to be running.
+Deselect instances in other states before choosing those actions.
 
-Reboot and Terminate open a confirmation showing the exact selected hostnames,
-instance IDs, group, and count. Termination is permanent;
+Start, Stop, Reboot, and Terminate appear together beside the selection controls.
+Each action opens a confirmation showing the exact selected hostnames, instance
+IDs, group, and count. Termination is permanent;
 disks configured for deletion on termination, including notebook files on those
 disks, are deleted. Back up student work first. See:
 
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/terminate_instances.html
 
+Stop uses EC2's normal shutdown request. Stopping clears kernel memory and
+interrupts notebook sessions; files on EBS disks remain available after starting
+again. Wait for the stopped state before using Start. Starting resumes EC2
+compute charges, and Jupyter may need a little longer to finish starting. See:
+
+    https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/stop_instances.html
+    https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/start_instances.html
+
 The dashboard rechecks the reviewed IDs, group tags, and states before sending
-reboot or termination requests. Both actions apply to the instances listed in
+any action requests. All four actions apply to the instances listed in
 the confirmation; instances launched later are excluded. Successful requests
 clear the selection; failed requests keep it for review. The dashboard keeps
 the empty group selected after termination.
@@ -92,9 +102,9 @@ actions until a refresh succeeds. If only health queries fail, addresses and
 states still update and unavailable checks appear as "unknown".
 
 AWS access needs ec2:DescribeInstances and ec2:DescribeInstanceStatus for the
-table, ec2:RebootInstances for reboot, ec2:StartInstances for start, and
-ec2:TerminateInstances for termination. Launch uses the existing launcher's EC2
-permissions and proxy SSH configuration.
+table, ec2:RebootInstances for reboot, ec2:StartInstances for start,
+ec2:StopInstances for stop, and ec2:TerminateInstances for termination. Launch
+uses the existing launcher's EC2 permissions and proxy SSH configuration.
 
 Run the local tests with the dependencies installed (AWS calls are stubbed):
 

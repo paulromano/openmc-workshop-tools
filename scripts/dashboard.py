@@ -12,7 +12,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
 
-from dashboard_aws import EC2Service, LaunchRequest, REGION, TERMINATABLE_STATES, launch_group
+from dashboard_aws import ACTION_STATES, EC2Service, LaunchRequest, REGION, TERMINATABLE_STATES, launch_group
 from launch_instances import IMAGE_ID, INSTANCE_TYPE
 
 
@@ -27,41 +27,6 @@ class InstanceTable(DataTable):
             self.post_message(DataTable.RowSelected(self, row, self.ordered_rows[row].key))
             event.prevent_default()
             event.stop()
-
-
-class ConfirmInstance(ModalScreen[bool]):
-    BINDINGS = [('escape', 'cancel', 'Cancel')]
-
-    def __init__(self, action, instance):
-        super().__init__()
-        self.operation = action
-        self.instance = instance
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll(classes='dialog'):
-            yield Static(f'{self.operation.capitalize()} {self.instance.hostname}?',
-                         classes='dialog-title', markup=False)
-            yield Static(f'Group: {self.instance.group}\nInstance: {self.instance.instance_id}',
-                         markup=False)
-            if self.operation == 'reboot':
-                yield Static('Rebooting interrupts the session and clears kernel memory. '
-                             'Saved files remain on disk.')
-            else:
-                yield Static('Starting this instance resumes EC2 compute charges.')
-            with Horizontal(classes='dialog-buttons'):
-                yield Button('Cancel', id='cancel')
-                yield Button(self.operation.capitalize(), id='confirm', variant='warning')
-
-    def on_mount(self):
-        self.query_one('#cancel', Button).focus()
-
-    @on(Button.Pressed, '#confirm')
-    def confirm(self):
-        self.dismiss(True)
-
-    @on(Button.Pressed, '#cancel')
-    def action_cancel(self):
-        self.dismiss(False)
 
 
 class LaunchGroup(ModalScreen[LaunchRequest | None]):
@@ -123,7 +88,13 @@ class ConfirmSelection(ModalScreen[bool]):
                          classes='dialog-title', markup=False)
             yield Static(f'Group: {self.instances[0].group}  |  {len(self.instances)} instances',
                          markup=False)
-            if self.operation == 'reboot':
+            if self.operation == 'start':
+                yield Static('Starting the selected instances resumes EC2 compute charges. '
+                             'Allow time for the notebooks to start.')
+            elif self.operation == 'stop':
+                yield Static('Stopping interrupts the selected sessions and clears kernel memory. '
+                             'Files on EBS disks remain available when the instances start again.')
+            elif self.operation == 'reboot':
                 yield Static('Rebooting interrupts the selected sessions and clears kernel memory. '
                              'Saved files remain on disk.')
             else:
@@ -135,7 +106,8 @@ class ConfirmSelection(ModalScreen[bool]):
             with Horizontal(classes='dialog-buttons'):
                 yield Button('Cancel', id='cancel')
                 yield Button(self.operation.capitalize(), id='confirm-selection',
-                             variant='warning' if self.operation == 'reboot' else 'error')
+                             variant={'start': 'success', 'stop': 'warning',
+                                      'reboot': 'warning', 'terminate': 'error'}[self.operation])
 
     def on_mount(self):
         self.query_one('#cancel', Button).focus()
@@ -155,13 +127,14 @@ class Dashboard(App):
         ('g', 'groups', 'Groups'),
         ('r', 'refresh_instances', 'Refresh'),
         ('b', 'reboot', 'Reboot'),
-        ('s', 'start_instance', 'Start'),
+        ('s', 'start', 'Start'),
+        ('S', 'stop', 'Stop'),
         ('n', 'launch', 'Launch'),
         ('t', 'terminate_selected', 'Terminate'),
         Binding('space', 'toggle_mark', 'Select row', show=False),
         Binding('a', 'select_all', 'Select all', show=False),
         Binding('c', 'clear_marks', 'Clear selection', show=False),
-        ('l', 'toggle_activity', 'Log'),
+        Binding('l', 'toggle_activity', 'Log', show=False),
         ('q', 'quit', 'Quit'),
     ]
     CSS = '''
@@ -171,7 +144,7 @@ class Dashboard(App):
     #groups { width: 1fr; max-width: 30; margin-right: 1; }
     #toolbar Button { min-width: 9; width: auto; margin-left: 1; }
     #selectionbar { height: 1; margin: 0 1; }
-    #selectionbar Button { min-width: 8; width: auto; margin-right: 1; }
+    #selectionbar Button { min-width: 6; width: auto; margin-right: 1; }
     #selection-count { width: 1fr; content-align: left middle; }
     #summary { height: 1; margin: 0 2; }
     #instances { height: 1fr; min-height: 4; margin: 0 1; border: solid $primary; }
@@ -179,7 +152,7 @@ class Dashboard(App):
     #refresh-status { height: auto; max-height: 3; margin: 0 2; }
     #health-hint { height: 1; margin: 0 2; color: $text-muted; }
     #activity { display: none; height: 6; margin: 0 1; border: solid $primary; }
-    ConfirmInstance, LaunchGroup, ConfirmSelection {
+    LaunchGroup, ConfirmSelection {
         align: center middle; background: $background 70%;
     }
     .dialog {
@@ -222,11 +195,12 @@ class Dashboard(App):
             yield Label('Group')
             yield Select([], prompt='Select a group', id='groups')
             yield Button('Refresh', id='refresh')
-            yield Button('Start', id='start', disabled=True)
             yield Button('Launch group', id='launch', variant='primary')
         with Horizontal(id='selectionbar'):
             yield Button('Select all', id='select-all', compact=True, disabled=True)
             yield Button('Clear', id='clear-marks', compact=True, disabled=True)
+            yield Button('Start', id='start', variant='success', compact=True, disabled=True)
+            yield Button('Stop', id='stop', variant='warning', compact=True, disabled=True)
             yield Button('Reboot', id='reboot', variant='warning', compact=True, disabled=True)
             yield Button('Terminate', id='terminate', variant='error', compact=True, disabled=True)
             yield Static('0 selected', id='selection-count', markup=False)
@@ -237,7 +211,7 @@ class Dashboard(App):
         yield Static('EC2 checks cover host and OS health; Jupyter can hang while checks pass.',
                      id='health-hint')
         yield RichLog(id='activity', max_lines=200, wrap=True, markup=False, highlight=False)
-        yield Footer(show_command_palette=False)
+        yield Footer(show_command_palette=False, compact=True)
 
     def on_mount(self):
         # Keep references to the base screen's widgets while dialogs are open.
@@ -249,10 +223,14 @@ class Dashboard(App):
         self.activity = self.query_one('#activity', RichLog)
         self.reboot_button = self.query_one('#reboot', Button)
         self.start_button = self.query_one('#start', Button)
+        self.stop_button = self.query_one('#stop', Button)
+        self.action_buttons = {'start': self.start_button, 'stop': self.stop_button,
+                               'reboot': self.reboot_button}
         self.launch_button = self.query_one('#launch', Button)
         self.select_all_button = self.query_one('#select-all', Button)
         self.clear_marks_button = self.query_one('#clear-marks', Button)
         self.terminate_button = self.query_one('#terminate', Button)
+        self.action_buttons['terminate'] = self.terminate_button
         self.selection_count = self.query_one('#selection-count', Static)
         self.activity.border_title = 'Activity'
         self.table.border_subtitle = 'Space/Enter: select · a: all · c: clear'
@@ -371,19 +349,21 @@ class Dashboard(App):
         else:
             self.details.update('No instances in this group. Use Launch group to create instances.'
                                 if self.snapshot is not None else 'Waiting for course instances.')
-        ready = instance is not None and not self.operation and not self.refresh_error
-        self.start_button.disabled = not (ready and instance.state == 'stopped')
         self.launch_button.disabled = bool(self.operation)
         selected = self.marked_instances
         can_change = bool(selected) and not self.operation and not self.refresh_error
-        running = all(item.state == 'running' for item in selected)
-        self.reboot_button.disabled = not (can_change and running)
-        self.reboot_button.tooltip = ('Reboot the selected instances' if running else
-                                      'Reboot requires every selected instance to be running')
+        for action, button in self.action_buttons.items():
+            allowed = all(item.state in ACTION_STATES[action] for item in selected)
+            button.disabled = not (can_change and allowed)
+            if not selected:
+                button.tooltip = f'Select instances to {action}'
+            elif allowed:
+                button.tooltip = f'{action.capitalize()} the selected instances'
+            else:
+                button.tooltip = self.state_requirement(action)
         eligible = any(item.state in TERMINATABLE_STATES for item in self.shown_instances)
         self.select_all_button.disabled = not eligible or bool(self.operation)
         self.clear_marks_button.disabled = not self.marked_ids or bool(self.operation)
-        self.terminate_button.disabled = not can_change
         self.selection_count.update(f'{len(self.marked_ids)} selected')
 
     def mark_text(self, instance):
@@ -460,29 +440,23 @@ class Dashboard(App):
         self.confirm_selection('reboot')
 
     @on(Button.Pressed, '#start')
-    def action_start_instance(self):
-        self.confirm_instance_action('start', 'stopped')
+    def action_start(self):
+        self.confirm_selection('start')
 
-    def confirm_instance_action(self, action, state):
-        if len(self.screen_stack) != 1 or self.operation:
-            return
-        instance = self.selected_instance
-        if instance is None or instance.state != state or self.refresh_error:
-            self.notify(f'Select a {state} instance in a refreshed table.', severity='warning')
-            return
-
-        def confirmed(accepted):
-            if accepted:
-                self.operation = f'{action.capitalize()} request for {instance.hostname}'
-                self.update_selection()
-                self.update_refresh_status()
-                self.change_instance(action, instance)
-
-        self.push_screen(ConfirmInstance(action, instance), confirmed)
+    @on(Button.Pressed, '#stop')
+    def action_stop(self):
+        self.confirm_selection('stop')
 
     @on(Button.Pressed, '#terminate')
     def action_terminate_selected(self):
         self.confirm_selection('terminate')
+
+    @staticmethod
+    def state_requirement(action):
+        if action == 'terminate':
+            return 'Select instances that have not begun shutting down.'
+        state = next(iter(ACTION_STATES[action]))
+        return f'{action.capitalize()} requires every selected instance to be {state}.'
 
     def confirm_selection(self, action):
         if len(self.screen_stack) != 1 or self.operation:
@@ -491,8 +465,8 @@ class Dashboard(App):
         if not instances or self.refresh_error:
             self.notify(f'Select instances in a refreshed table before choosing {action}.', severity='warning')
             return
-        if action == 'reboot' and any(item.state != 'running' for item in instances):
-            self.notify('Reboot requires every selected instance to be running.', severity='warning')
+        if any(item.state not in ACTION_STATES[action] for item in instances):
+            self.notify(self.state_requirement(action), severity='warning')
             return
 
         def confirmed(accepted):
@@ -509,9 +483,9 @@ class Dashboard(App):
 
     @work(group='operation')
     async def change_selected_instances(self, action, instances):
-        label = 'Reboot' if action == 'reboot' else 'Termination'
+        label = 'Termination' if action == 'terminate' else action.capitalize()
         try:
-            operation = self.service.reboot_instances if action == 'reboot' else self.service.terminate_instances
+            operation = getattr(self.service, f'{action}_instances')
             await asyncio.to_thread(operation, instances)
             for instance in instances:
                 self.log_message(f'{label} requested for {instance.hostname} ({instance.instance_id}).')
@@ -520,26 +494,11 @@ class Dashboard(App):
             self.marked_ids.difference_update(instance.instance_id for instance in instances)
             self.update_marks()
         except Exception as exc:
-            state = 'rebooting' if action == 'reboot' else 'terminating'
+            state = {'start': 'starting', 'stop': 'stopping',
+                     'reboot': 'rebooting', 'terminate': 'terminating'}[action]
             self.log_message(f'{label} failed: {exc}. Some instances may already be {state}. '
                              'Refresh the table before retrying.')
             self.notify(f'{label} failed. See Activity and refresh before retrying.', severity='error')
-        finally:
-            self.operation = ''
-            self.update_selection()
-            self.update_refresh_status()
-            self.action_refresh_instances()
-
-    @work(group='operation')
-    async def change_instance(self, action, instance):
-        try:
-            await asyncio.to_thread(self.service.change_state, action, instance)
-            self.log_message(f'{action.capitalize()} requested for {instance.hostname} ({instance.instance_id}).')
-            if action == 'reboot':
-                self.log_message('EC2 may still show running during a reboot; allow a few minutes for recovery.')
-        except Exception as exc:
-            self.log_message(f'{action.capitalize()} failed: {exc}')
-            self.notify(f'{action.capitalize()} failed. See Activity.', severity='error')
         finally:
             self.operation = ''
             self.update_selection()
