@@ -21,15 +21,20 @@ Groups are discovered from ws_group tags. Select student, instructor, or another
 group in the dropdown. The table shows hostname, state, EC2 system and instance
 checks, private IP, instance ID, type, and public DNS. Stopped and pending
 instances are included; terminated instances are excluded. Use the arrow keys
-to select a row and scroll horizontally. The selected instance's addresses and
-ID also appear below the table.
+to highlight a row and scroll horizontally. The highlighted instance's addresses
+and ID also appear below the table.
 
 Keyboard shortcuts (buttons also support the mouse):
 
     g       Open the group selector
     r       Refresh now
-    b       Reboot the selected running instance, after confirmation
-    s       Start the selected stopped instance, after confirmation
+    Space   Select or deselect the highlighted row (Enter or a click also works)
+    a       Select all eligible instances in the current group
+    c       Clear the selection
+    t       Terminate selected instances, or the highlighted row if none are selected
+    T       Terminate the current group
+    b       Reboot the highlighted running instance, after confirmation
+    s       Start the highlighted stopped instance, after confirmation
     n       Launch a new group, or add instances to an existing group
     l       Show or hide the activity log
     q       Quit
@@ -44,6 +49,26 @@ not measure memory usage or test Jupyter responsiveness. See:
 
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/reboot_instances.html
     https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/describe_instance_status.html
+
+The Select column marks instances chosen for termination. Selections survive
+refreshes and clear when switching groups. Instances that disappear or begin
+shutting down are removed from the selection. Reboot and start use the
+highlighted row independently of the termination selection.
+
+Terminate row, Terminate (N), and Terminate group open a confirmation showing
+the exact hostnames, instance IDs, group, and count. Termination is permanent;
+disks configured for deletion on termination, including notebook files on those
+disks, are deleted. Back up student work first. See:
+
+    https://docs.aws.amazon.com/boto3/latest/reference/services/ec2/client/terminate_instances.html
+
+The dashboard rechecks the reviewed IDs and group tags before termination.
+Group termination applies to the instances listed in the confirmation;
+instances launched later are excluded. Instances already shutting down are
+excluded too. The dashboard keeps the empty group selected after termination.
+AWS termination protection remains in effect. If a request fails, some
+instances may already be terminating; refresh the table before retrying.
+Termination leaves the existing NGINX proxy configuration in place.
 
 Launch group asks for a group name and count, shows the configured AMI and
 instance type, and runs launch_instances.py with those settings. Proxy updates
@@ -64,8 +89,9 @@ actions until a refresh succeeds. If only health queries fail, addresses and
 states still update and unavailable checks appear as "unknown".
 
 AWS access needs ec2:DescribeInstances and ec2:DescribeInstanceStatus for the
-table, ec2:RebootInstances for reboot, and ec2:StartInstances for start. Launch
-uses the existing launcher's EC2 permissions and proxy SSH configuration.
+table, ec2:RebootInstances for reboot, ec2:StartInstances for start, and
+ec2:TerminateInstances for termination. Launch uses the existing launcher's EC2
+permissions and proxy SSH configuration.
 
 Run the local tests with the dependencies installed (AWS calls are stubbed):
 

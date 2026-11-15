@@ -5,14 +5,28 @@ import asyncio
 from datetime import datetime
 
 from rich.text import Text
-from textual import on, work
+from textual import events, on, work
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
 
-from dashboard_aws import EC2Service, LaunchRequest, REGION, launch_group
+from dashboard_aws import EC2Service, LaunchRequest, REGION, TERMINATABLE_STATES, launch_group
 from launch_instances import IMAGE_ID, INSTANCE_TYPE
+
+
+class InstanceTable(DataTable):
+    def on_click(self, event: events.Click):
+        # DataTable normally selects only when clicking an already highlighted
+        # cell. Use its cell metadata to toggle each row on the first click.
+        row = event.style.meta.get('row', -1)
+        column = event.style.meta.get('column', -1)
+        if 0 <= row < self.row_count and column >= 0 and not event.style.meta.get('out_of_bounds'):
+            self.move_cursor(row=row, column=column)
+            self.post_message(DataTable.RowSelected(self, row, self.ordered_rows[row].key))
+            event.prevent_default()
+            event.stop()
 
 
 class ConfirmInstance(ModalScreen[bool]):
@@ -95,6 +109,42 @@ class LaunchGroup(ModalScreen[LaunchRequest | None]):
         self.dismiss(None)
 
 
+class ConfirmTermination(ModalScreen[bool]):
+    BINDINGS = [('escape', 'cancel', 'Cancel')]
+
+    def __init__(self, instances, whole_group=False):
+        super().__init__()
+        self.instances = instances
+        self.whole_group = whole_group
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes='dialog termination-dialog'):
+            title = (f'Terminate group {self.instances[0].group}?'
+                     if self.whole_group else f'Terminate {len(self.instances)} selected instances?')
+            yield Static(title, classes='dialog-title', markup=False)
+            yield Static(f'Group: {self.instances[0].group}  |  {len(self.instances)} instances',
+                         markup=False)
+            yield Static('Termination is permanent. Data on disks configured for deletion, '
+                         'including saved notebooks on those disks, will be lost.')
+            with VerticalScroll(id='termination-list'):
+                yield Static('\n'.join(f'{instance.hostname}  {instance.instance_id}  ({instance.state})'
+                                       for instance in self.instances), markup=False)
+            with Horizontal(classes='dialog-buttons'):
+                yield Button('Cancel', id='cancel')
+                yield Button('Terminate', id='terminate-confirm', variant='error')
+
+    def on_mount(self):
+        self.query_one('#cancel', Button).focus()
+
+    @on(Button.Pressed, '#terminate-confirm')
+    def confirm(self):
+        self.dismiss(True)
+
+    @on(Button.Pressed, '#cancel')
+    def action_cancel(self):
+        self.dismiss(False)
+
+
 class Dashboard(App):
     TITLE = 'OpenMC course · EC2'
     BINDINGS = [
@@ -102,7 +152,12 @@ class Dashboard(App):
         ('r', 'refresh_instances', 'Refresh'),
         ('b', 'reboot', 'Reboot'),
         ('s', 'start_instance', 'Start'),
-        ('n', 'launch', 'Launch group'),
+        ('n', 'launch', 'Launch'),
+        ('t', 'terminate_selected', 'Terminate'),
+        Binding('T', 'terminate_group', 'Terminate group', show=False),
+        Binding('space', 'toggle_mark', 'Select row', show=False),
+        Binding('a', 'select_all', 'Select all', show=False),
+        Binding('c', 'clear_marks', 'Clear selection', show=False),
         ('l', 'toggle_activity', 'Log'),
         ('q', 'quit', 'Quit'),
     ]
@@ -112,13 +167,18 @@ class Dashboard(App):
     #toolbar Label { padding: 1 1 0 0; }
     #groups { width: 1fr; max-width: 30; margin-right: 1; }
     #toolbar Button { min-width: 9; width: auto; margin-left: 1; }
+    #selectionbar { height: 1; margin: 0 1; }
+    #selectionbar Button { min-width: 8; width: auto; margin-right: 1; }
+    #selection-count { width: 1fr; content-align: left middle; }
     #summary { height: 1; margin: 0 2; }
     #instances { height: 1fr; min-height: 4; margin: 0 1; border: solid $primary; }
     #details { height: auto; min-height: 3; max-height: 6; margin: 0 2; }
     #refresh-status { height: auto; max-height: 3; margin: 0 2; }
     #health-hint { height: 1; margin: 0 2; color: $text-muted; }
     #activity { display: none; height: 6; margin: 0 1; border: solid $primary; }
-    ConfirmInstance, LaunchGroup { align: center middle; background: $background 70%; }
+    ConfirmInstance, LaunchGroup, ConfirmTermination {
+        align: center middle; background: $background 70%;
+    }
     .dialog {
         width: 68; max-width: 95%; height: auto; max-height: 95%;
         padding: 1 2; border: thick $accent; background: $surface;
@@ -134,6 +194,8 @@ class Dashboard(App):
     .dialog-buttons { height: 3; margin-top: 1; align-horizontal: right; }
     .dialog-buttons Button { margin-left: 1; }
     #launch-error { color: $error; height: auto; max-height: 4; }
+    .termination-dialog { height: 24; }
+    #termination-list { height: 1fr; min-height: 2; border: solid $primary; margin-top: 1; }
     '''
 
     def __init__(self, group=None, refresh_interval=30, service=None):
@@ -149,6 +211,7 @@ class Dashboard(App):
         self.remembered_groups = {group} if group else set()
         self.group_options = []
         self.shown_instances = ()
+        self.marked_ids = set()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -159,14 +222,20 @@ class Dashboard(App):
             yield Button('Reboot', id='reboot', disabled=True)
             yield Button('Start', id='start', disabled=True)
             yield Button('Launch group', id='launch', variant='primary')
+        with Horizontal(id='selectionbar'):
+            yield Button('Select all', id='select-all', compact=True, disabled=True)
+            yield Button('Clear', id='clear-marks', compact=True, disabled=True)
+            yield Button('Terminate row', id='terminate-selected', variant='error', compact=True, disabled=True)
+            yield Button('Terminate group', id='terminate-group', variant='error', compact=True, disabled=True)
+            yield Static('0 selected', id='selection-count', markup=False)
         yield Static('Loading course instances…', id='summary', markup=False)
-        yield DataTable(id='instances', cursor_type='row', zebra_stripes=True)
+        yield InstanceTable(id='instances', cursor_type='row', zebra_stripes=True)
         yield Static('Select an instance with the arrow keys.', id='details', markup=False)
         yield Static('', id='refresh-status', markup=False)
         yield Static('EC2 checks cover host and OS health; Jupyter can hang while checks pass.',
                      id='health-hint')
         yield RichLog(id='activity', max_lines=200, wrap=True, markup=False, highlight=False)
-        yield Footer()
+        yield Footer(show_command_palette=False)
 
     def on_mount(self):
         # Keep references to the base screen's widgets while dialogs are open.
@@ -179,7 +248,14 @@ class Dashboard(App):
         self.reboot_button = self.query_one('#reboot', Button)
         self.start_button = self.query_one('#start', Button)
         self.launch_button = self.query_one('#launch', Button)
+        self.select_all_button = self.query_one('#select-all', Button)
+        self.clear_marks_button = self.query_one('#clear-marks', Button)
+        self.terminate_button = self.query_one('#terminate-selected', Button)
+        self.terminate_group_button = self.query_one('#terminate-group', Button)
+        self.selection_count = self.query_one('#selection-count', Static)
         self.activity.border_title = 'Activity'
+        self.table.border_subtitle = 'Space/Enter: select · a: all · c: clear'
+        self.table.add_column('Select', key='marked', width=6)
         self.table.add_columns('Hostname', 'State', 'System check', 'Instance check',
                                'Private IP', 'Instance ID', 'Type', 'Public DNS')
         self.table.focus()
@@ -255,11 +331,16 @@ class Dashboard(App):
     def render_instances(self):
         selected = self.selected_instance
         instances = tuple(instance for instance in self.snapshot.instances if instance.group == self.group)
+        # Keep selections across refreshes by ID, and limit them to the visible
+        # group and instances that have not already begun shutting down.
+        self.marked_ids.intersection_update(instance.instance_id for instance in instances
+                                            if instance.state in TERMINATABLE_STATES)
         if instances != self.shown_instances:
             self.shown_instances = instances
             self.table.clear()
             for instance in instances:
-                self.table.add_row(Text(instance.hostname), self.status_text(instance.state),
+                self.table.add_row(self.mark_text(instance), Text(instance.hostname),
+                                   self.status_text(instance.state),
                                    self.status_text(instance.system_check),
                                    self.status_text(instance.instance_check),
                                    Text(instance.private_ip), Text(instance.instance_id),
@@ -293,6 +374,64 @@ class Dashboard(App):
         self.reboot_button.disabled = not (ready and instance.state == 'running')
         self.start_button.disabled = not (ready and instance.state == 'stopped')
         self.launch_button.disabled = bool(self.operation)
+        can_terminate = not self.operation and not self.refresh_error
+        eligible = any(item.state in TERMINATABLE_STATES for item in self.shown_instances)
+        self.select_all_button.disabled = not eligible or bool(self.operation)
+        self.clear_marks_button.disabled = not self.marked_ids or bool(self.operation)
+        self.terminate_button.disabled = not (can_terminate and self.termination_selection)
+        self.terminate_group_button.disabled = not (can_terminate and eligible)
+        self.terminate_button.label = (f'Terminate ({len(self.marked_ids)})'
+                                       if self.marked_ids else 'Terminate row')
+        self.selection_count.update(f'{len(self.marked_ids)} selected')
+
+    def mark_text(self, instance):
+        if instance.state not in TERMINATABLE_STATES:
+            return Text('—')
+        return Text('[x]' if instance.instance_id in self.marked_ids else '[ ]')
+
+    @property
+    def termination_selection(self):
+        if self.marked_ids:
+            return tuple(item for item in self.shown_instances if item.instance_id in self.marked_ids)
+        instance = self.selected_instance
+        return (instance,) if instance and instance.state in TERMINATABLE_STATES else ()
+
+    def update_marks(self):
+        for instance in self.shown_instances:
+            self.table.update_cell(instance.instance_id, 'marked', self.mark_text(instance))
+        self.update_selection()
+
+    def toggle_mark(self, instance_id):
+        if self.operation or len(self.screen_stack) != 1:
+            return
+        instance = next((item for item in self.shown_instances if item.instance_id == instance_id), None)
+        if instance and instance.state in TERMINATABLE_STATES:
+            if instance_id in self.marked_ids:
+                self.marked_ids.remove(instance_id)
+            else:
+                self.marked_ids.add(instance_id)
+            self.update_marks()
+
+    def action_toggle_mark(self):
+        if self.table.has_focus and self.selected_instance:
+            self.toggle_mark(self.selected_instance.instance_id)
+
+    @on(DataTable.RowSelected, '#instances')
+    def row_selected(self, event):
+        self.toggle_mark(event.row_key.value)
+
+    @on(Button.Pressed, '#select-all')
+    def action_select_all(self):
+        if len(self.screen_stack) == 1 and not self.operation:
+            self.marked_ids = {item.instance_id for item in self.shown_instances
+                               if item.state in TERMINATABLE_STATES}
+            self.update_marks()
+
+    @on(Button.Pressed, '#clear-marks')
+    def action_clear_marks(self):
+        if len(self.screen_stack) == 1 and not self.operation:
+            self.marked_ids.clear()
+            self.update_marks()
 
     def update_refresh_status(self):
         when = f'Last updated {self.updated_at:%H:%M:%S}' if self.updated_at else 'Waiting for EC2'
@@ -341,6 +480,51 @@ class Dashboard(App):
                 self.change_instance(action, instance)
 
         self.push_screen(ConfirmInstance(action, instance), confirmed)
+
+    @on(Button.Pressed, '#terminate-selected')
+    def action_terminate_selected(self):
+        self.confirm_termination(self.termination_selection)
+
+    @on(Button.Pressed, '#terminate-group')
+    def action_terminate_group(self):
+        self.confirm_termination(tuple(item for item in self.shown_instances
+                                       if item.state in TERMINATABLE_STATES), whole_group=True)
+
+    def confirm_termination(self, instances, whole_group=False):
+        if len(self.screen_stack) != 1 or self.operation:
+            return
+        if not instances or self.refresh_error:
+            self.notify('Select instances in a refreshed table before terminating.', severity='warning')
+            return
+
+        def confirmed(accepted):
+            if accepted:
+                self.operation = f'Terminating {len(instances)} instances in {instances[0].group}'
+                # Keep the empty group selected after its last instance leaves.
+                self.remembered_groups.add(instances[0].group)
+                self.update_selection()
+                self.update_refresh_status()
+                self.terminate_instances(instances)
+
+        self.push_screen(ConfirmTermination(instances, whole_group), confirmed)
+
+    @work(group='operation')
+    async def terminate_instances(self, instances):
+        try:
+            await asyncio.to_thread(self.service.terminate_instances, instances)
+            for instance in instances:
+                self.log_message(f'Termination requested for {instance.hostname} ({instance.instance_id}).')
+            self.marked_ids.difference_update(instance.instance_id for instance in instances)
+            self.update_marks()
+        except Exception as exc:
+            self.log_message(f'Termination failed: {exc}. Some instances may already be terminating. '
+                             'Refresh the table before retrying.')
+            self.notify('Termination failed. See Activity and refresh before retrying.', severity='error')
+        finally:
+            self.operation = ''
+            self.update_selection()
+            self.update_refresh_status()
+            self.action_refresh_instances()
 
     @work(group='operation')
     async def change_instance(self, action, instance):

@@ -16,6 +16,7 @@ from utils import get_aws_tag
 
 REGION = 'us-east-1'
 LIVE_STATES = ['pending', 'running', 'stopping', 'stopped', 'shutting-down']
+TERMINATABLE_STATES = {'pending', 'running', 'stopping', 'stopped'}
 
 
 @dataclass(frozen=True)
@@ -133,6 +134,34 @@ class EC2Service:
             raise ValueError(f'The instance is now {state}. Refresh the table before trying again.')
         operation = self.ec2.reboot_instances if action == 'reboot' else self.ec2.start_instances
         operation(InstanceIds=[instance.instance_id])
+
+    def terminate_instances(self, instances):
+        """Recheck the reviewed IDs and group before requesting termination."""
+        if not instances:
+            raise ValueError('Select at least one instance to terminate.')
+        if len({instance.group for instance in instances}) != 1:
+            raise ValueError('Terminate instances from one group at a time.')
+        reviewed = {instance.instance_id: instance for instance in instances}
+        instance_ids = list(reviewed)
+        current = {}
+        # Read every instance before issuing any termination requests. The
+        # reviewed list stays fixed even if new instances join the group.
+        for start in range(0, len(instance_ids), 1000):
+            for page in self.ec2.get_paginator('describe_instances').paginate(
+                    InstanceIds=instance_ids[start:start + 1000]):
+                current.update((instance['InstanceId'], instance)
+                               for reservation in page['Reservations']
+                               for instance in reservation['Instances'])
+        for instance_id, instance in reviewed.items():
+            actual = current.get(instance_id)
+            if actual is None or get_aws_tag(actual.get('Tags', []), 'ws_group') != instance.group:
+                raise ValueError(f'{instance_id} is no longer in the reviewed group. '
+                                 'Refresh the table and review the instances again.')
+            if actual['State']['Name'] not in TERMINATABLE_STATES:
+                raise ValueError(f"{instance_id} is now {actual['State']['Name']}. "
+                                 'Refresh the table and review the instances again.')
+        for start in range(0, len(instance_ids), 1000):
+            self.ec2.terminate_instances(InstanceIds=instance_ids[start:start + 1000])
 
 
 async def launch_group(request, output):
