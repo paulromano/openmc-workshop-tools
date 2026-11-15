@@ -41,13 +41,17 @@ Keyboard shortcuts (buttons also support the mouse):
     q       Quit
     Escape  Cancel a dialog
 
-SSH opens a full terminal session for the highlighted row, independently of the
-checked rows. Use h or the SSH button. The dashboard returns to the instance
-list when you type exit or press Ctrl+D. Commands, editors, Ctrl+C, and terminal
-resizing work through the system's OpenSSH client. The current group, cursor,
-and checked rows are preserved, and EC2 refreshes when the session closes.
-Automatic refresh pauses during SSH. Connection errors with status 255 remain
-visible until you press Enter to return to the dashboard.
+SSH opens an embedded terminal below the instance list for the highlighted row,
+independently of the checked rows. Use h or the SSH button. The list stays
+visible above the terminal and continues refreshing. The normal layout returns
+when you type exit or press Ctrl+D. The group, cursor, and checked rows are
+preserved. Use Disconnect or Ctrl+] to close the session directly.
+
+While the terminal has focus, keys such as Escape, Tab, arrow keys, Ctrl+C, and
+the dashboard's letter shortcuts go to the remote shell. The pane supports
+terminal colors, interactive commands, and resizing through the system's
+OpenSSH client. Connection errors stay in the pane until you use Close or Enter.
+Instance-changing actions are disabled while an SSH session is connected.
 
 SSH uses ubuntu and the key configured in update_proxy.py by default
 (/home/romano/.ssh/id_rsa). Override them as needed:

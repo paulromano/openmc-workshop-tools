@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 from datetime import datetime
+import shutil
 
 from rich.text import Text
 from textual import events, on, work
@@ -13,7 +14,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
 
 from dashboard_aws import ACTION_STATES, EC2Service, LaunchRequest, REGION, TERMINATABLE_STATES, launch_group
-from dashboard_ssh import SSH_KEY, SSH_USER, run_ssh, ssh_command
+from dashboard_ssh import SSH_KEY, SSH_USER, SSHSession, ssh_command
 from launch_instances import IMAGE_ID, INSTANCE_TYPE
 
 
@@ -128,6 +129,7 @@ class Dashboard(App):
         ('g', 'groups', 'Groups'),
         ('r', 'refresh_instances', 'Refresh'),
         ('h', 'ssh', 'SSH'),
+        Binding('ctrl+right_square_bracket', 'disconnect_ssh', 'Disconnect SSH', show=False, priority=True),
         ('b', 'reboot', 'Reboot'),
         ('s', 'start', 'Start'),
         ('S', 'stop', 'Stop'),
@@ -154,6 +156,13 @@ class Dashboard(App):
     #refresh-status { height: auto; max-height: 3; margin: 0 2; }
     #health-hint { height: 1; margin: 0 2; color: $text-muted; }
     #activity { display: none; height: 6; margin: 0 1; border: solid $primary; }
+    #ssh-panel { display: none; height: 2fr; min-height: 8; margin: 0 1; border: solid $accent; }
+    #ssh-controls { height: 1; }
+    #ssh-status { width: 1fr; }
+    #ssh-close { width: auto; min-width: 12; }
+    #ssh-terminal { height: 1fr; }
+    Screen.ssh-open #details, Screen.ssh-open #health-hint, Screen.ssh-open #activity { display: none; }
+    Screen.ssh-open #instances { min-height: 5; }
     LaunchGroup, ConfirmSelection {
         align: center middle; background: $background 70%;
     }
@@ -196,6 +205,9 @@ class Dashboard(App):
         self.ssh_private_ip = ssh_private_ip
         self.ssh_active = False
         self.ssh_refresh_pending = False
+        self.ssh_terminal = None
+        self.ssh_worker = None
+        self.ssh_generation = 0
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -215,6 +227,11 @@ class Dashboard(App):
             yield Static('0 selected', id='selection-count', markup=False)
         yield Static('Loading course instances…', id='summary', markup=False)
         yield InstanceTable(id='instances', cursor_type='row', zebra_stripes=True)
+        with Vertical(id='ssh-panel'):
+            with Horizontal(id='ssh-controls'):
+                yield Static('exit / Ctrl+D: return · Ctrl+]: disconnect', id='ssh-status', markup=False)
+                yield Button('Disconnect', id='ssh-close', compact=True)
+            yield Vertical(id='ssh-body')
         yield Static('Select an instance with the arrow keys.', id='details', markup=False)
         yield Static('', id='refresh-status', markup=False)
         yield Static('EC2 checks cover host and OS health; Jupyter can hang while checks pass.',
@@ -224,6 +241,7 @@ class Dashboard(App):
 
     def on_mount(self):
         # Keep references to the base screen's widgets while dialogs are open.
+        self.dashboard_screen = self.screen
         self.table = self.query_one('#instances', DataTable)
         self.groups = self.query_one('#groups', Select)
         self.summary = self.query_one('#summary', Static)
@@ -232,6 +250,10 @@ class Dashboard(App):
         self.activity = self.query_one('#activity', RichLog)
         self.ssh_button = self.query_one('#ssh', Button)
         self.ssh_button.tooltip = 'SSH into the highlighted running instance (h)'
+        self.ssh_panel = self.query_one('#ssh-panel', Vertical)
+        self.ssh_body = self.query_one('#ssh-body', Vertical)
+        self.ssh_status = self.query_one('#ssh-status', Static)
+        self.ssh_close = self.query_one('#ssh-close', Button)
         self.reboot_button = self.query_one('#reboot', Button)
         self.start_button = self.query_one('#start', Button)
         self.stop_button = self.query_one('#stop', Button)
@@ -261,7 +283,7 @@ class Dashboard(App):
         self.activity.display = not self.activity.display
 
     def action_refresh_instances(self):
-        if not self.refreshing and not self.ssh_active:
+        if not self.refreshing:
             self.refreshing = True
             self.update_refresh_status()
             self.fetch_instances()
@@ -366,7 +388,8 @@ class Dashboard(App):
                                 if self.snapshot is not None else 'Waiting for course instances.')
         self.launch_button.disabled = bool(self.operation)
         self.ssh_button.disabled = not (instance and instance.state == 'running'
-                                        and not self.operation and not self.refresh_error)
+                                        and not self.operation and not self.refresh_error
+                                        and self.ssh_terminal is None)
         selected = self.marked_instances
         can_change = bool(selected) and not self.operation and not self.refresh_error
         for action, button in self.action_buttons.items():
@@ -454,7 +477,7 @@ class Dashboard(App):
 
     @on(Button.Pressed, '#ssh')
     def action_ssh(self):
-        if len(self.screen_stack) != 1 or self.operation:
+        if len(self.screen_stack) != 1 or self.operation or self.ssh_terminal is not None:
             return
         instance = self.selected_instance
         if instance is None or instance.state != 'running' or self.refresh_error:
@@ -462,46 +485,89 @@ class Dashboard(App):
             return
         self.operation = f'SSH to {instance.hostname} ({instance.instance_id})'
         self.ssh_active = True
+        self.ssh_generation += 1
         self.update_selection()
         self.update_refresh_status()
-        self.connect_ssh(instance)
+        self.ssh_worker = self.connect_ssh(instance, self.ssh_generation)
 
     @work(group='operation')
-    async def connect_ssh(self, instance):
+    async def connect_ssh(self, instance, generation):
         try:
             host = await asyncio.to_thread(self.service.ssh_address, instance, private=self.ssh_private_ip)
+            if generation != self.ssh_generation:
+                return
             command = ssh_command(host, self.ssh_user, self.ssh_key)
+            if shutil.which(command[0]) is None:
+                raise FileNotFoundError('SSH client was not found. Install OpenSSH and retry.')
             self.log_message(f'SSH to {instance.hostname} ({instance.instance_id}) at {host}.', reveal=False)
-            failure = None
-            with self.suspend():
-                try:
-                    print(f'\nSSH to {instance.instance_id} at {host} as {self.ssh_user!r}.')
-                    print('Type exit or press Ctrl+D to return to the dashboard.\n', flush=True)
-                    code = run_ssh(command)
-                except BaseException as exc:
-                    # Let Textual resume before propagating an error, including
-                    # cancellation. Its suspend context resumes after the yield.
-                    failure = exc
-            if failure is not None:
-                raise failure
-            if code == 0:
-                self.log_message(f'SSH session closed for {instance.hostname}.', reveal=False)
-            else:
-                self.log_message(f'SSH for {instance.hostname} exited with status {code}.')
-                self.notify(f'SSH exited with status {code}. See Activity.', severity='warning')
+            self.ssh_panel.border_title = Text(f'SSH · {instance.hostname} · {instance.instance_id}')
+            self.ssh_panel.display = True
+            self.dashboard_screen.add_class('ssh-open')
+            self.ssh_status.update('exit / Ctrl+D: return · Ctrl+]: disconnect')
+            self.ssh_close.label = 'Disconnect'
+            terminal = SSHSession(command=command, id='ssh-terminal')
+            self.ssh_terminal = terminal
+            await self.ssh_body.mount(terminal)
+            if generation == self.ssh_generation and self.ssh_active:
+                terminal.focus()
+        except asyncio.CancelledError:
+            return
         except Exception as exc:
             self.log_message(f'SSH failed for {instance.hostname}: {exc}')
             self.notify('SSH failed. See Activity.', severity='error')
-        finally:
-            self.ssh_active = False
-            self.operation = ''
+            await self.close_ssh_panel()
+
+    def check_action(self, action, parameters):
+        if action == 'disconnect_ssh':
+            return len(self.screen_stack) == 1 and (self.ssh_active or self.ssh_terminal is not None)
+        if self.ssh_terminal is not None and self.ssh_terminal.has_focus:
+            # Ctrl+] remains the explicit way out; normal dashboard shortcuts
+            # and control keys belong to the remote shell while it has focus.
+            return False
+        return super().check_action(action, parameters)
+
+    @on(SSHSession.Exited, '#ssh-terminal')
+    async def ssh_exited(self, event):
+        if event.session is not self.ssh_terminal:
+            return
+        self.ssh_active = False
+        self.operation = ''
+        if event.code != 255 and event.session.process is not None:
+            self.log_message(f'SSH session closed (status {event.code}).', reveal=False)
+            await self.close_ssh_panel()
+        else:
+            self.ssh_status.update(f'SSH exited ({event.code}) · Close or Enter to return')
+            self.ssh_close.label = 'Close'
+            self.ssh_terminal.can_focus = False
+            self.ssh_close.focus()
+            self.log_message(f'SSH exited with status {event.code}.', reveal=False)
             self.update_selection()
             self.update_refresh_status()
+
+    @on(Button.Pressed, '#ssh-close')
+    async def action_disconnect_ssh(self):
+        self.ssh_generation += 1
+        if self.ssh_worker is not None and self.ssh_worker.is_running:
+            self.ssh_worker.cancel()
+        await self.close_ssh_panel()
+
+    async def close_ssh_panel(self):
+        terminal = self.ssh_terminal
+        self.ssh_terminal = None
+        if terminal is not None:
+            await terminal.remove()
+        self.ssh_panel.display = False
+        self.dashboard_screen.remove_class('ssh-open')
+        self.ssh_active = False
+        self.operation = ''
+        self.update_selection()
+        self.update_refresh_status()
+        if self.screen is self.dashboard_screen:
             self.table.focus()
-            if self.refreshing:
-                self.ssh_refresh_pending = True
-            else:
-                self.action_refresh_instances()
+        if self.refreshing:
+            self.ssh_refresh_pending = True
+        else:
+            self.action_refresh_instances()
 
     @on(Button.Pressed, '#reboot')
     def action_reboot(self):
