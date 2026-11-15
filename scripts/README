@@ -28,6 +28,7 @@ Keyboard shortcuts (buttons also support the mouse):
 
     g       Open the group selector
     r       Refresh now
+    h       SSH into the highlighted running instance
     Space   Select or deselect the highlighted row (Enter or a click also works)
     a       Select all eligible instances in the current group
     c       Clear the selection
@@ -39,6 +40,26 @@ Keyboard shortcuts (buttons also support the mouse):
     l       Show or hide the activity log
     q       Quit
     Escape  Cancel a dialog
+
+SSH opens a full terminal session for the highlighted row, independently of the
+checked rows. Use h or the SSH button. The dashboard returns to the instance
+list when you type exit or press Ctrl+D. Commands, editors, Ctrl+C, and terminal
+resizing work through the system's OpenSSH client. The current group, cursor,
+and checked rows are preserved, and EC2 refreshes when the session closes.
+Automatic refresh pauses during SSH. Connection errors with status 255 remain
+visible until you press Enter to return to the dashboard.
+
+SSH uses ubuntu and the key configured in update_proxy.py by default
+(/home/romano/.ssh/id_rsa). Override them as needed:
+
+    python scripts/dashboard.py --ssh-user ubuntu --ssh-key ~/.ssh/course-key
+
+Set --ssh-key '' to use keys from your SSH configuration or agent. Normal SSH
+host-key checks and ~/.ssh/config apply, including passphrase prompts. The
+dashboard rechecks the instance's group, running state, and current address
+before connecting, preferring public DNS, then public IP, then private IP.
+Use --ssh-private-ip to always connect through the private address; this needs
+network access to the VPC. SSH also needs port 22 access to the instance.
 
 Reboot requests use EC2 RebootInstances. EC2 can continue to show "running"
 during a reboot. AWS attempts a hard reboot if the instance cannot shut down

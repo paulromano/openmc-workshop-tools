@@ -13,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, DataTable, Footer, Header, Input, Label, RichLog, Select, Static
 
 from dashboard_aws import ACTION_STATES, EC2Service, LaunchRequest, REGION, TERMINATABLE_STATES, launch_group
+from dashboard_ssh import SSH_KEY, SSH_USER, run_ssh, ssh_command
 from launch_instances import IMAGE_ID, INSTANCE_TYPE
 
 
@@ -126,6 +127,7 @@ class Dashboard(App):
     BINDINGS = [
         ('g', 'groups', 'Groups'),
         ('r', 'refresh_instances', 'Refresh'),
+        ('h', 'ssh', 'SSH'),
         ('b', 'reboot', 'Reboot'),
         ('s', 'start', 'Start'),
         ('S', 'stop', 'Stop'),
@@ -174,7 +176,8 @@ class Dashboard(App):
     #reviewed-instances { height: 1fr; min-height: 2; border: solid $primary; margin-top: 1; }
     '''
 
-    def __init__(self, group=None, refresh_interval=30, service=None):
+    def __init__(self, group=None, refresh_interval=30, service=None,
+                 ssh_user=SSH_USER, ssh_key=SSH_KEY, ssh_private_ip=False):
         super().__init__()
         self.group = group
         self.refresh_interval = refresh_interval
@@ -188,6 +191,11 @@ class Dashboard(App):
         self.group_options = []
         self.shown_instances = ()
         self.marked_ids = set()
+        self.ssh_user = ssh_user
+        self.ssh_key = ssh_key
+        self.ssh_private_ip = ssh_private_ip
+        self.ssh_active = False
+        self.ssh_refresh_pending = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -195,6 +203,7 @@ class Dashboard(App):
             yield Label('Group')
             yield Select([], prompt='Select a group', id='groups')
             yield Button('Refresh', id='refresh')
+            yield Button('SSH', id='ssh', disabled=True)
             yield Button('Launch group', id='launch', variant='primary')
         with Horizontal(id='selectionbar'):
             yield Button('Select all', id='select-all', compact=True, disabled=True)
@@ -221,6 +230,8 @@ class Dashboard(App):
         self.details = self.query_one('#details', Static)
         self.refresh_status = self.query_one('#refresh-status', Static)
         self.activity = self.query_one('#activity', RichLog)
+        self.ssh_button = self.query_one('#ssh', Button)
+        self.ssh_button.tooltip = 'SSH into the highlighted running instance (h)'
         self.reboot_button = self.query_one('#reboot', Button)
         self.start_button = self.query_one('#start', Button)
         self.stop_button = self.query_one('#stop', Button)
@@ -241,15 +252,16 @@ class Dashboard(App):
         self.action_refresh_instances()
         self.set_interval(self.refresh_interval, self.action_refresh_instances)
 
-    def log_message(self, message):
-        self.activity.display = True
+    def log_message(self, message, reveal=True):
+        if reveal:
+            self.activity.display = True
         self.activity.write(Text(f'{datetime.now():%H:%M:%S}  {message}'))
 
     def action_toggle_activity(self):
         self.activity.display = not self.activity.display
 
     def action_refresh_instances(self):
-        if not self.refreshing:
+        if not self.refreshing and not self.ssh_active:
             self.refreshing = True
             self.update_refresh_status()
             self.fetch_instances()
@@ -272,6 +284,9 @@ class Dashboard(App):
             self.refreshing = False
             self.update_refresh_status()
             self.update_selection()
+            if self.ssh_refresh_pending and not self.ssh_active:
+                self.ssh_refresh_pending = False
+                self.action_refresh_instances()
 
     def update_groups(self):
         groups = sorted({instance.group for instance in self.snapshot.instances}
@@ -350,6 +365,8 @@ class Dashboard(App):
             self.details.update('No instances in this group. Use Launch group to create instances.'
                                 if self.snapshot is not None else 'Waiting for course instances.')
         self.launch_button.disabled = bool(self.operation)
+        self.ssh_button.disabled = not (instance and instance.state == 'running'
+                                        and not self.operation and not self.refresh_error)
         selected = self.marked_instances
         can_change = bool(selected) and not self.operation and not self.refresh_error
         for action, button in self.action_buttons.items():
@@ -434,6 +451,57 @@ class Dashboard(App):
     @on(Button.Pressed, '#refresh')
     def refresh_pressed(self):
         self.action_refresh_instances()
+
+    @on(Button.Pressed, '#ssh')
+    def action_ssh(self):
+        if len(self.screen_stack) != 1 or self.operation:
+            return
+        instance = self.selected_instance
+        if instance is None or instance.state != 'running' or self.refresh_error:
+            self.notify('Highlight a running instance in a refreshed table to use SSH.', severity='warning')
+            return
+        self.operation = f'SSH to {instance.hostname} ({instance.instance_id})'
+        self.ssh_active = True
+        self.update_selection()
+        self.update_refresh_status()
+        self.connect_ssh(instance)
+
+    @work(group='operation')
+    async def connect_ssh(self, instance):
+        try:
+            host = await asyncio.to_thread(self.service.ssh_address, instance, private=self.ssh_private_ip)
+            command = ssh_command(host, self.ssh_user, self.ssh_key)
+            self.log_message(f'SSH to {instance.hostname} ({instance.instance_id}) at {host}.', reveal=False)
+            failure = None
+            with self.suspend():
+                try:
+                    print(f'\nSSH to {instance.instance_id} at {host} as {self.ssh_user!r}.')
+                    print('Type exit or press Ctrl+D to return to the dashboard.\n', flush=True)
+                    code = run_ssh(command)
+                except BaseException as exc:
+                    # Let Textual resume before propagating an error, including
+                    # cancellation. Its suspend context resumes after the yield.
+                    failure = exc
+            if failure is not None:
+                raise failure
+            if code == 0:
+                self.log_message(f'SSH session closed for {instance.hostname}.', reveal=False)
+            else:
+                self.log_message(f'SSH for {instance.hostname} exited with status {code}.')
+                self.notify(f'SSH exited with status {code}. See Activity.', severity='warning')
+        except Exception as exc:
+            self.log_message(f'SSH failed for {instance.hostname}: {exc}')
+            self.notify('SSH failed. See Activity.', severity='error')
+        finally:
+            self.ssh_active = False
+            self.operation = ''
+            self.update_selection()
+            self.update_refresh_status()
+            self.table.focus()
+            if self.refreshing:
+                self.ssh_refresh_pending = True
+            else:
+                self.action_refresh_instances()
 
     @on(Button.Pressed, '#reboot')
     def action_reboot(self):
@@ -556,10 +624,19 @@ def main(argv=None):
     parser.add_argument('--group', help='Group to select initially (ws_group tag)')
     parser.add_argument('--refresh-interval', type=float, default=30, metavar='SECONDS',
                         help='Seconds between refreshes, at least 5 (default: 30)')
+    parser.add_argument('--ssh-user', default=SSH_USER,
+                        help=f'SSH login username (default: {SSH_USER})')
+    parser.add_argument('--ssh-key', default=SSH_KEY, metavar='PATH',
+                        help='SSH identity file; an empty value uses SSH configuration and agent keys')
+    parser.add_argument('--ssh-private-ip', action='store_true',
+                        help='Use private IPs for SSH (requires network access to the VPC)')
     args = parser.parse_args(argv)
     if not 5 <= args.refresh_interval < float('inf'):
         parser.error('--refresh-interval must be a finite number of at least 5 seconds')
-    Dashboard(group=args.group, refresh_interval=args.refresh_interval).run()
+    if not args.ssh_user.strip():
+        parser.error('--ssh-user must not be empty')
+    Dashboard(group=args.group, refresh_interval=args.refresh_interval,
+              ssh_user=args.ssh_user, ssh_key=args.ssh_key, ssh_private_ip=args.ssh_private_ip).run()
 
 
 if __name__ == '__main__':

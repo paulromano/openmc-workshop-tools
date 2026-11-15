@@ -149,10 +149,19 @@ class EC2Service:
             if actual['State']['Name'] not in allowed_states:
                 raise ValueError(f"{instance_id} is now {actual['State']['Name']}. "
                                  'Refresh the table and review the instances again.')
-        return instance_ids
+        return {instance_id: current[instance_id] for instance_id in instance_ids}
+
+    def ssh_address(self, instance, private=False):
+        """Recheck a running instance and read its latest SSH address."""
+        current = self._review_instances((instance,), 'connect to', {'running'})[instance.instance_id]
+        address = current.get('PrivateIpAddress') if private else (
+            current.get('PublicDnsName') or current.get('PublicIpAddress') or current.get('PrivateIpAddress'))
+        if not address:
+            raise ValueError(f'{instance.instance_id} has no available SSH address. Refresh the table and retry.')
+        return address
 
     def _change_instances(self, action, instances):
-        instance_ids = self._review_instances(instances, action, ACTION_STATES[action])
+        instance_ids = list(self._review_instances(instances, action, ACTION_STATES[action]))
         operation = getattr(self.ec2, f'{action}_instances')
         for start in range(0, len(instance_ids), 1000):
             operation(InstanceIds=instance_ids[start:start + 1000])
