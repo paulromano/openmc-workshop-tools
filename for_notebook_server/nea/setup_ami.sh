@@ -193,15 +193,12 @@ cmake --build "$BUILD_DIR/njoy2016/build" --parallel "$JOBS"
 install -d "$SOFTWARE_DIR/njoy2016/bin"
 install -m 755 "$BUILD_DIR/njoy2016/build/njoy" "$SOFTWARE_DIR/njoy2016/bin/njoy"
 
-clone_source openmc https://github.com/openmc-dev/openmc "$OPENMC_REF"
-build_cmake openmc "-DCMAKE_INSTALL_PREFIX=$SOFTWARE_DIR/openmc" \
-    -DOPENMC_USE_DAGMC=ON -DOPENMC_USE_LIBMESH=ON -DOPENMC_USE_OPENMP=ON \
-    "-DOPENMC_USE_MPI=$OPENMC_USE_MPI" "-DHDF5_PREFER_PARALLEL=$OPENMC_USE_MPI" \
-    "-DHDF5_ROOT=$HDF5_ROOT" -DOPENMC_BUILD_TESTS=OFF
-# Use the installed library: CMake rewrites RUNPATH during installation, after
-# its post-build copy into the source package. Package the final deployed copy.
-install -m 755 "$SOFTWARE_DIR/openmc/lib/libopenmc.so" "$BUILD_DIR/openmc/openmc/lib/libopenmc.so"
-"$PYTHON" -m pip install "$BUILD_DIR/openmc"
+# Keep OpenMC and its incremental build outside the disposable build.* tree.
+install -d "$NEA_ROOT/bin"
+install -m 755 "$SCRIPT_DIR/rebuild_openmc.sh" "$NEA_ROOT/bin/rebuild_openmc.sh"
+env NEA_ROOT="$NEA_ROOT" OPENMC_REF="$OPENMC_REF" OPENMC_USE_MPI="$OPENMC_USE_MPI" JOBS="$JOBS" \
+    "$NEA_ROOT/bin/rebuild_openmc.sh" --update --no-verify
+cat "$RECORD_DIR/openmc-revision.txt" >> "$BUILD_DIR/revisions.txt"
 "$PYTHON" -m pip install git+https://github.com/openmc-dev/openmc_mcnp_adapter.git
 if [[ $OPENMC_USE_MPI == ON ]]; then
     MPICC=/usr/bin/mpicc.mpich "$PYTHON" -m pip install --no-binary=mpi4py mpi4py
@@ -249,7 +246,8 @@ cp /etc/os-release "$RECORD_DIR/os-release"
 sha256sum "$CHAIN_FILE" > "$RECORD_DIR/chain.sha256"
 cp "$BUILD_DIR/revisions.txt" "$RECORD_DIR/revisions.txt"
 printf 'course %s %s\n' "$COURSE_BRANCH" "$(git -C "$COURSE_DIR" rev-parse HEAD)" >> "$RECORD_DIR/revisions.txt"
-install -m 644 "$SCRIPT_DIR/setup_ami.sh" "$SCRIPT_DIR/requirements.txt" "$SCRIPT_DIR/moab_endian.patch" "$RECORD_DIR/"
+install -m 644 "$SCRIPT_DIR/setup_ami.sh" "$SCRIPT_DIR/rebuild_openmc.sh" \
+    "$SCRIPT_DIR/requirements.txt" "$SCRIPT_DIR/moab_endian.patch" "$RECORD_DIR/"
 
 # Verify without access to the build tree before enabling the service.
 set -a

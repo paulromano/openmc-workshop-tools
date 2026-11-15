@@ -50,6 +50,7 @@ class EnvironmentTest(unittest.TestCase):
             ['bash', '--noprofile', '--norc', '-c', 'set -a; . "$1"; env -0', 'bash', str(env_file)])
         env = dict(item.decode().split('=', 1) for item in result.split(b'\0') if item)
         self.assertEqual(env['PATH'].split(':')[0], str(self.args.root / 'venv/bin'))
+        self.assertIn(str(self.args.root / 'bin'), env['PATH'].split(':'))
         self.assertEqual(env['OPENMC_CROSS_SECTIONS'], str(self.args.cross_sections))
         self.assertEqual((self.args.home / 'data').resolve(), self.args.root / 'data')
         self.assertEqual((self.args.home / 'data/endfb71_hdf5').resolve(), self.args.cross_sections.parent)

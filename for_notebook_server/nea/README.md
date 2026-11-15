@@ -1,6 +1,7 @@
 > Created: 2026-11-13; Producer: Codex / GPT-6.1-Sol high\
 > Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
-> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high
+> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
+> Updated: 2026-11-15; Producer: Codex / GPT-6.1-Sol high
 
 # NEA course AMI setup
 
@@ -29,7 +30,7 @@ bash setup_ami.sh
 
 An interactive build prompts for the Jupyter password after installing the Python packages, before the native builds. For an unattended build, export `JUPYTER_PASSWORD_HASH` with a hash produced by `jupyter_server.auth.passwd`. An existing password in `~/.jupyter/jupyter_server_config.json` is preserved when no replacement hash is supplied. The script does not print the password or its hash.
 
-The script installs and upgrades Ubuntu packages. Native builds and the roughly 6-GiB extracted cross-section library take additional time and disk space. Sources, compiler output, and build logs remain under `/opt/nea/build.*` for inspection. Failed builds stop immediately and report their build directory. A rerun uses a new build directory and rebuilds the native components.
+The script installs and upgrades Ubuntu packages. Native builds and the roughly 6-GiB extracted cross-section library take additional time and disk space. Dependency sources, compiler output, and setup logs remain under `/opt/nea/build.*` for inspection. OpenMC has a persistent Git checkout at `/opt/nea/src/openmc` and an incremental CMake build at `/opt/nea/build/openmc`. Failed builds stop immediately and report their build directory. Rerunning the setup rebuilds the native dependencies; use the installed OpenMC rebuild command for routine OpenMC updates.
 
 ## Defaults and options
 
@@ -88,6 +89,42 @@ sudo systemctl restart nea-jupyter.service
 tail -f ~/notebook_launch.log
 ```
 
+## Update or rebuild OpenMC
+
+The setup installs `/opt/nea/bin/rebuild_openmc.sh` and adds `/opt/nea/bin` to the course environment's `PATH`. Run it as `ubuntu` on a builder launched from the course AMI. Stop Jupyter before replacing the installation and start it after the rebuild passes, so notebook kernels load the new package and library:
+
+```bash
+sudo systemctl stop nea-jupyter.service &&
+    /opt/nea/bin/rebuild_openmc.sh --update &&
+    sudo systemctl start nea-jupyter.service
+```
+
+`--update` fetches the selected `OPENMC_REF`, checks out its branch or tag, fast-forwards branches, and updates submodules. It preserves local commits and refuses to update tracked files with uncommitted changes. The default ref is `develop`. To rebuild local code without fetching or changing the checkout, omit `--update`. To select a release, use `OPENMC_REF=v0.16.0 /opt/nea/bin/rebuild_openmc.sh --update`. `JOBS=4` changes the build parallelism. The command remembers the ref, MPI mode, and job count from its last successful invocation; these settings can be overridden through environment variables.
+
+The helper reuses installed MOAB, Double-Down, DAGMC, libMesh, and HDF5. It reconfigures CMake, builds incrementally, installs the executable and shared library, and force-reinstalls the Python package in `/opt/nea/venv` from the same checkout. Python dependencies remain at their installed versions; `pip check` reports any new dependency requirements. The package includes the final installed shared library so its bytes match the native installation. The helper then runs the full NEA verification, including executable and in-memory transport. It updates the revision, CMake cache, OpenMC version, and Python package records; tracked local edits are saved in `openmc-local.patch`. Output is appended to `/opt/nea/build-records/openmc-rebuild.log`.
+
+Keep `/opt/nea/src/openmc`, `/opt/nea/bin`, and `/opt/nea/build-records` when preparing the AMI. Keeping `/opt/nea/build/openmc` makes subsequent builds incremental; if that build directory is removed, the helper recreates it from the preserved source. Disposable `/opt/nea/build.*` directories can be removed after inspection. After updating, test representative notebooks and follow the AMI cleanup and creation steps in [the build guide](../../notes/05-nea_ami_build.md).
+
+### Add the rebuild command to an older course AMI
+
+An existing AMI with the installed NEA software can gain this workflow without rerunning the full setup. Copy the new helper from your local repository:
+
+```bash
+scp for_notebook_server/nea/rebuild_openmc.sh ubuntu@HOST:~/rebuild_openmc.sh
+```
+
+On the builder, install and run it:
+
+```bash
+mkdir -p /opt/nea/bin
+install -m 755 ~/rebuild_openmc.sh /opt/nea/bin/rebuild_openmc.sh
+sudo systemctl stop nea-jupyter.service &&
+    /opt/nea/bin/rebuild_openmc.sh --update &&
+    sudo systemctl start nea-jupyter.service
+```
+
+The first run clones a full Git repository into `/opt/nea/src/openmc` and creates the persistent CMake build using the existing dependencies. It uses the MPI setting in the saved OpenMC CMake cache when available. Use `OPENMC_USE_MPI=ON` or `OFF` to select it explicitly. The existing installed `/opt/nea/nea_environment.py` and course environment configuration must be present. Using the absolute rebuild-command path works even when the older image's `PATH` does not include `/opt/nea/bin`.
+
 ## Checks before creating the AMI
 
 The setup checks Python imports, OpenMC build features, matching executable/Python shared-library hashes, the data paths and chain, NJOY, VTK file I/O and off-screen rendering, a small executable transport calculation, and an in-memory transport calculation. It also checks the Jupyter login page when the service is started. It saves source revisions, CMake configuration, package versions, and the recipe in `/opt/nea/build-records`.
@@ -106,8 +143,9 @@ Create the AMI using the usual EC2 image-creation process after the course check
 
 ```bash
 bash -n for_notebook_server/nea/setup_ami.sh
-shellcheck for_notebook_server/nea/setup_ami.sh
+bash -n for_notebook_server/nea/rebuild_openmc.sh
+shellcheck for_notebook_server/nea/setup_ami.sh for_notebook_server/nea/rebuild_openmc.sh
 python -B -m unittest discover -s for_notebook_server/nea/tests -v
 ```
 
-The local tests check generated environment files, legacy paths, password preservation, repeat runs, Jupyter's loading of the generated configuration, and systemd's parsing of the generated service. The Jupyter and systemd checks require those tools locally. The Ubuntu 26.04 native build and full course-notebook run must be performed on the builder before using the new AMI for a course.
+The local tests check generated environment files, legacy paths, password preservation, repeat runs, Jupyter's loading of the generated configuration, and systemd's parsing of the generated service. Rebuild tests use a local Git repository and a small CMake/C project to check updates, incremental rebuilds, recreating a deleted build directory, local-edit preservation, and MPI settings; pip and the full course verifier are simulated in those tests. These tests require Git, CMake, GCC, and flock. The Jupyter and systemd checks require those tools locally. The Ubuntu 26.04 OpenMC build and full course-notebook run must be performed on the builder before using the new AMI for a course.

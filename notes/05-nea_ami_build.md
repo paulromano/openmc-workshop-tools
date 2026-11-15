@@ -1,7 +1,8 @@
 > Created: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
 > Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
 > Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
-> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high
+> Updated: 2026-11-14; Producer: Codex / GPT-6.1-Sol high\
+> Updated: 2026-11-15; Producer: Codex / GPT-6.1-Sol high
 
 # Build an Ubuntu 26.04 AMI for the NEA OpenMC course
 
@@ -97,6 +98,16 @@ Detach from tmux with **Ctrl+B**, then **D**. To reconnect, use `ssh -A ubuntu@H
 
 Build output is saved in `/opt/nea/build.*/setup.log`. The script stops at an error and reports its build directory. Rerunning it creates a new build directory and rebuilds the native components.
 
+OpenMC's Git checkout is retained at `/opt/nea/src/openmc`, with its incremental CMake build at `/opt/nea/build/openmc`. To update only OpenMC on this or a later builder launched from the AMI, use:
+
+```bash
+sudo systemctl stop nea-jupyter.service &&
+    /opt/nea/bin/rebuild_openmc.sh --update &&
+    sudo systemctl start nea-jupyter.service
+```
+
+This fetches the selected OpenMC branch, rebuilds and reinstalls the executable and Python package, and runs the environment and transport checks using the existing dependencies. Omit `--update` to rebuild local edits without changing the checkout. For an older AMI that lacks this helper, follow [the migration instructions](../for_notebook_server/nea/README.md#add-the-rebuild-command-to-an-older-course-ami). After rebuilding, repeat the notebook checks and AMI preparation below.
+
 If an older copy prompts for a sudo password at the initial `sudo -v`, press **Ctrl+C**. Ubuntu 26.04's sudo-rs can request authentication for validation even when commands have passwordless sudo permission. The current script uses `sudo true`; update the old copy with:
 
 ```bash
@@ -142,7 +153,7 @@ Reconnect and repeat the service, environment, and browser checks. Jupyter shoul
 
 ## 5. Prepare the disk for the AMI
 
-**Builder:** finish the notebook checks, preserve the build records, and remove disposable build files, notebook test outputs, and any private credentials that should not be distributed. `/opt/nea/build.*` contains the retained build directories; inspect those directories before removing them. Keep `/opt/nea/build-records`, `/opt/nea/software`, `/opt/nea/venv`, `/opt/nea/data`, the course checkout, and the generated configuration files.
+**Builder:** finish the notebook checks, preserve the build records, and remove disposable build files, notebook test outputs, and any private credentials that should not be distributed. `/opt/nea/build.*` contains disposable dependency build directories; inspect those directories before removing them. Keep `/opt/nea/src/openmc` and `/opt/nea/bin` so OpenMC can be updated on future builders. Keep `/opt/nea/build/openmc` for fast incremental rebuilds; it can be regenerated from the preserved source if space is needed. Also keep `/opt/nea/build-records`, `/opt/nea/software`, `/opt/nea/venv`, `/opt/nea/data`, the course checkout, and the generated configuration files.
 
 Stop Jupyter, clear its temporary connection files and cookie secret, reset cloud-init state, and shut down:
 

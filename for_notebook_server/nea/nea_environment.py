@@ -23,7 +23,7 @@ def write_file(path, text, mode=0o644):
 def configure(args):
     home, root, course = args.home, args.root, args.course
     software, venv = root / 'software', root / 'venv'
-    bins = [venv / 'bin', *(software / p / 'bin' for p in
+    bins = [venv / 'bin', root / 'bin', *(software / p / 'bin' for p in
                            ['openmc', 'dagmc', 'moab', 'njoy2016', 'libmesh'])]
     env = {
         'PATH': ':'.join(map(str, bins)) + ':/usr/local/bin:/usr/bin:/bin',
