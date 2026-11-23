@@ -36,7 +36,7 @@ from utils import get_group_instances, unused_hostnames
 #IMAGE_ID = 'ami-045e275aa4922cd98' # ANFM July 2025 (us-east-1)
 #IMAGE_ID = 'ami-0e4a0355118ee4d3b' # NEA Course 2025-11
 #IMAGE_ID = 'ami-0c5753a97399407e3' # NEA Course 2026-05
-IMAGE_ID = 'ami-0f28f1c1f0ce441c5' # NEA Course 2026-11
+IMAGE_ID = 'ami-02d3663c7106aff7a' # NEA Course 2026-11
 
 KEYPAIR_NAME = 'X1 Carbon 2022'
 SECURITY_GROUP = 'sg-130bcb6b'

@@ -32,7 +32,7 @@ for res in resp['Reservations']:
 # SSH into each instance and start the server.
 for inst_ip in instance_ips:
     print(inst_ip)
-    args = ['ssh', '-o', 'UserKnownHostsFile=/dev/null', '-o',
+    args = ['ssh', '-A', '-o', 'UserKnownHostsFile=/dev/null', '-o',
             'StrictHostKeyChecking=no', '-i', KEYPAIR_PATH,
             f'ubuntu@{inst_ip}', 'bash -i -l']
     ssh_process = subprocess.Popen(args, stdin=subprocess.PIPE,
